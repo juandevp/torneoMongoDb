@@ -1,0 +1,114 @@
+[{
+  "_id": {
+    "$oid": "663faceade11ea4305e672da"
+  },
+  "Presidente": "Alejandro Arteta",
+  "Entrenador": {
+    "Nombre": "Arturo Reyes Montero",
+    "Pais": "Colombia",
+    "Edad": "55",
+    "Experiencia": "ExFutbolista",
+    "EquiposAnteriores": [
+      "Atlético Bucaramanga",
+      "Selección Colombia"
+    ]
+  },
+  "Propietario": "Fuad Char",
+  "DirectorDeportivo": "null"
+},
+{
+  "_id": {
+    "$oid": "663fb119de11ea4305e672ef"
+  },
+  "Presidente": "Álvaro López Bedoya",
+  "Entrenador": {
+    "Nombre": "Leonel Álvarez",
+    "Pais": "Colombia",
+    "Edad": "58",
+    "Experiencia": "ExFutbolista",
+    "EquiposAnteriores": [
+      "Independiente Medellín",
+      "Selección Colombia",
+      "Itagüí Fútbol Club S.A.",
+      "Deportivo Cali",
+      "Independiente Medellín",
+      "Club Cerro Porteño",
+      "Club Libertad",
+      "Águilas Doradas Rionegro",
+      "Club Cienciano",
+      "Deportivo Pereira"
+    ]
+  },
+  "DirectorDeportivo": "Héctor Fabio Ospina",
+  "Propietario": null
+},
+{
+  "_id": {
+    "$oid": "663fb2c2de11ea4305e672f5"
+  },
+  "Presidente": "Enrique Camacho",
+  "Entrenador": {
+    "Nombre": "Alberto Gamero",
+    "Pais": "Colombia",
+    "Edad": "60",
+    "Experiencia": "ExFutbolista",
+    "EquiposAnteriores": [
+      "Chía Fair Play",
+      "Bogotá Fútbol Club",
+      "Boyacá Chicó",
+      "Águilas Doradas Rionegro",
+      "Deportes Tolima",
+      "Junior de Barranquilla",
+      "Club Libertad",
+      "Deportes Tolima",
+      "Millonarios"
+    ]
+  },
+  "DirectorDeportivo": "Ricardo Pérez",
+  "Propietario": "Amber Capital"
+},
+{
+  "_id": {
+    "$oid": "663fb4e8de11ea4305e672fe"
+  },
+  "Presidente": "Jaime Elías Quintero",
+  "Entrenador": {
+    "Nombre": "Rafael Dudamel",
+    "Pais": "Venezuela",
+    "Edad": "60",
+    "Experiencia": "ExFutbolista",
+    "EquiposAnteriores": [
+      "Estudiantes de Mérida",
+      "Selección sub-17",
+      "Deportivo Lara",
+      "Selección sub-20",
+      "Selección absoluta",
+      "Atlético Mineiro",
+      "Universidad de Chile",
+      "Necaxa",
+      "Atlético Bucaramanga"
+    ]
+  },
+  "DirectorDeportivo": null,
+  "Propietario": "Oscar Álvarez"
+},
+{
+  "_id": {
+    "$oid": "663fb6adde11ea4305e6730b"
+  },
+  "Presidente": "Tulio Mario Castrillón",
+  "Entrenador": {
+    "Nombre": "Pablo Peirano",
+    "Pais": "Uruguay",
+    "Edad": "49",
+    "Experiencia": "ExFutbolista",
+    "EquiposAnteriores": [
+      "Racing Club de Montevideo",
+      "Danubio Fútbol Club",
+      "Carlos A. Mannucci",
+      "Cusco Fútbol Club"
+    ]
+  },
+  "DirectorDeportivo": null,
+  "Propietario": "Diego Omar Perdomo (85 %) Socios (15 %)"
+}]

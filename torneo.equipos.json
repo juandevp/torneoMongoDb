@@ -1,0 +1,287 @@
+[{
+  "_id": {
+    "$oid": "663fac8ade11ea4305e672d9"
+  },
+  "NombreClub": "Junior",
+  "CiudadClub": "Barranquilla",
+  "Estadio": "Roberto Melendéz",
+  "Liga": "Bet Play",
+  "GrupoTecnico": {
+    "$oid": "663faceade11ea4305e672da"
+  },
+  "Alineacion": [
+    {
+      "NombreJugador": "Bacca",
+      "Numero": 70
+    },
+    {
+      "NombreJugador": "Daniel Giraldo",
+      "Numero": 7
+    },
+    {
+      "NombreJugador": "Didier Moreno",
+      "Numero": 6
+    },
+    {
+      "NombreJugador": "Edwin Velasco",
+      "Numero": 3
+    },
+    {
+      "NombreJugador": "Cesaer Haydar",
+      "Numero": 4
+    },
+    {
+      "NombreJugador": "José Ortiz",
+      "Numero": 31
+    },
+    {
+      "NombreJugador": "Walmer Pacheco",
+      "Numero": 21
+    },
+    {
+      "NombreJugador": "Viera",
+      "Numero": 1
+    }
+  ],
+  "Grupo": "A"
+},
+{
+  "_id": {
+    "$oid": "663faf21de11ea4305e672ed"
+  },
+  "NombreClub": "Deportivo Pereira",
+  "CiudadClub": "Pereira",
+  "Estadio": "Hernández Ramírez Villegas",
+  "Liga": "Bet Play",
+  "GrupoTecnico": {
+    "$oid": "663fb119de11ea4305e672ef"
+  },
+  "Alineacion": [
+    {
+      "NombreJugador": "Leonardo Castro",
+      "Numero": 23
+    },
+    {
+      "NombreJugador": "L. Berrío",
+      "Numero": 7
+    },
+    {
+      "NombreJugador": "B. León",
+      "Numero": 9
+    },
+    {
+      "NombreJugador": "Jime Fory",
+      "Numero": 27
+    },
+    {
+      "NombreJugador": "Maicol Medina",
+      "Numero": 18
+    },
+    {
+      "NombreJugador": "Jhony Vásquez",
+      "Numero": 25
+    },
+    {
+      "NombreJugador": "Juan Pablo Zuluaga",
+      "Numero": 13
+    },
+    {
+      "NombreJugador": "Carlos Ramírez",
+      "Numero": 29
+    },
+    {
+      "NombreJugador": "Andrés Correa",
+      "Numero": 5
+    },
+    {
+      "NombreJugador": "Jherson Mosquera",
+      "Numero": 6
+    },
+    {
+      "NombreJugador": "Harlen Castillo",
+      "Numero": 1
+    }
+  ],
+  "Grupo": "A"
+},
+{
+  "_id": {
+    "$oid": "663fb1fbde11ea4305e672f3"
+  },
+  "NombreClub": "Millonarios Fútbol Club",
+  "CiudadClub": "Bogotá",
+  "Estadio": "Nemesio Camacho El Campín",
+  "Liga": "Bet Play",
+  "GrupoTecnico": {
+    "$oid": "663fb2c2de11ea4305e672f5"
+  },
+  "Alineacion": [
+    {
+      "NombreJugador": "Luis Carlos",
+      "Numero": 27
+    },
+    {
+      "NombreJugador": "D. Ruiz",
+      "Numero": 10
+    },
+    {
+      "NombreJugador": "David Silva",
+      "Numero": 14
+    },
+    {
+      "NombreJugador": "Carlos gomez",
+      "Numero": 11
+    },
+    {
+      "NombreJugador": "David Silva",
+      "Numero": 14
+    },
+    {
+      "NombreJugador": "Larry Vasquez",
+      "Numero": 5
+    },
+    {
+      "NombreJugador": "Juan Pereira",
+      "Numero": 21
+    },
+    {
+      "NombreJugador": "Omar Bertel",
+      "Numero": 3
+    },
+    {
+      "NombreJugador": "Oscar Vanegas",
+      "Numero": 6
+    },
+    {
+      "NombreJugador": "Andres Llinas",
+      "Numero": 26
+    },
+    {
+      "NombreJugador": "Israek Albsa",
+      "Numero": 20
+    }
+  ],
+  "Grupo": "A"
+},
+{
+  "_id": {
+    "$oid": "663fb348de11ea4305e672fc"
+  },
+  "NombreClub": "Atlético Bucaramanga",
+  "CiudadClub": "Bucaramanga",
+  "Estadio": "Alfonso López",
+  "Liga": "Bet Play",
+  "GrupoTecnico": {
+    "$oid": "663fb4e8de11ea4305e672fe"
+  },
+  "Alineacion": [
+    {
+      "NombreJugador": "Moreno",
+      "Numero": 17
+    },
+    {
+      "NombreJugador": "Jhoan Caballero",
+      "Numero": 23
+    },
+    {
+      "NombreJugador": "Sherman Cárdenas",
+      "Numero": 10
+    },
+    {
+      "NombreJugador": "Gustavo Adolfo",
+      "Numero": 7
+    },
+    {
+      "NombreJugador": "David Silva",
+      "Numero": 14
+    },
+    {
+      "NombreJugador": "Francisco Rodriguez",
+      "Numero": 28
+    },
+    {
+      "NombreJugador": "Cichel Acosta",
+      "Numero": 14
+    },
+    {
+      "NombreJugador": "David Gómez",
+      "Numero": 19
+    },
+    {
+      "NombreJugador": "Carlos Henao",
+      "Numero": 29
+    },
+    {
+      "NombreJugador": "Francisco Meza",
+      "Numero": 21
+    },
+    {
+      "NombreJugador": "Cristhian Subero",
+      "Numero": 24
+    },
+    {
+      "NombreJugador": "Juan Camilo",
+      "Numero": 1
+    }
+  ],
+  "Grupo": "A"
+},
+{
+  "_id": {
+    "$oid": "663fbc61de11ea4305e67328"
+  },
+  "NombreClub": "Santa Fe",
+  "CiudadClub": "Bogotá",
+  "Estadio": "Nemesio Camacho El Campín",
+  "Liga": "Bet Play",
+  "GrupoTecnico": {
+    "$oid": "663fb6adde11ea4305e6730b"
+  },
+  "Alineacion": [
+    {
+      "NombreJugador": "Wilson Morelo",
+      "Numero": 19
+    },
+    {
+      "NombreJugador": "Andrey Estupiñan",
+      "Numero": 27
+    },
+    {
+      "NombreJugador": "J. Torres",
+      "Numero": 31
+    },
+    {
+      "NombreJugador": "J. Enamorado",
+      "Numero": 29
+    },
+    {
+      "NombreJugador": "Carlos Sanchez",
+      "Numero": 6
+    },
+    {
+      "NombreJugador": "Dayron Mosquera",
+      "Numero": 30
+    },
+    {
+      "NombreJugador": "K. Matilla",
+      "Numero": 28
+    },
+    {
+      "NombreJugador": "A. Gutierrez",
+      "Numero": 2
+    },
+    {
+      "NombreJugador": "Edwin Herrera",
+      "Numero": 4
+    },
+    {
+      "NombreJugador": "Jose Silva",
+      "Numero": 1
+    },
+    {
+      "NombreJugador": "Jonathan Barboza",
+      "Numero": null
+    }
+  ],
+  "Grupo": "B"
+}]
