@@ -284,4 +284,184 @@
     }
   ],
   "Grupo": "B"
+},
+{
+  "_id": {
+    "$oid": "6640d54d72132156fe995ecd"
+  },
+  "NombreClub": "Deportes Tolima",
+  "CiudadClub": "Bucaramanga",
+  "Estadio": "Manuel Murillo Toro",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d58672132156fe995ece"
+  },
+  "NombreClub": "La Equidad",
+  "CiudadClub": "Bogotá",
+  "Estadio": "Metropolitano de Techo",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d5b672132156fe995ecf"
+  },
+  "NombreClub": "Once Caldas",
+  "CiudadClub": "Manizales",
+  "Estadio": "Palogrande",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d5e772132156fe995ed0"
+  },
+  "NombreClub": "Independiente Medellín",
+  "CiudadClub": "Medellín",
+  "Estadio": "Atanasio Girardot",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d61572132156fe995ed1"
+  },
+  "NombreClub": "América",
+  "CiudadClub": "Cali",
+  "Estadio": "Olímpico Pascual Guerrero",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d64072132156fe995ed2"
+  },
+  "NombreClub": " Águilas Doradas Rionegro",
+  "CiudadClub": "Rionegro",
+  "Estadio": "Alberto Grisales",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d66772132156fe995ed3"
+  },
+  "NombreClub": "Atlético Nacional",
+  "CiudadClub": "Medellín",
+  "Estadio": "Atanasio Girardot",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d68a72132156fe995ed4"
+  },
+  "NombreClub": "Fortaleza CEIF",
+  "CiudadClub": "Bogotá",
+  "Estadio": "Metropolitano de Techo",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d6b372132156fe995ed5"
+  },
+  "NombreClub": "Jaguares de Córdoba",
+  "CiudadClub": "Córdoba",
+  "Estadio": "Jaraguay",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d6de72132156fe995ed6"
+  },
+  "NombreClub": "Deportivo Cali",
+  "CiudadClub": "Cali",
+  "Estadio": "Deportivo Cali",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d6ff72132156fe995ed7"
+  },
+  "NombreClub": "Deportivo Pasto",
+  "CiudadClub": "Pasto",
+  "Estadio": "Departamental Libertad",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d71d72132156fe995ed8"
+  },
+  "NombreClub": "Boyacá Chicó",
+  "CiudadClub": "Boyacá",
+  "Estadio": "La Independencia",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d73e72132156fe995ed9"
+  },
+  "NombreClub": "Envigado Fútbol Club",
+  "CiudadClub": "Envigado",
+  "Estadio": "Polideportivo Sur",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d76472132156fe995eda"
+  },
+  "NombreClub": "Alianza Petrolera",
+  "CiudadClub": "Barrancabermeja",
+  "Estadio": "Daniel Villa Zapata",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
+},
+{
+  "_id": {
+    "$oid": "6640d78672132156fe995edb"
+  },
+  "NombreClub": "Patriotas Boyacá",
+  "CiudadClub": "Boyacá",
+  "Estadio": "La Independencia",
+  "Liga": "Bet Play",
+  "GrupoTecnico": null,
+  "Alineacion": null,
+  "Grupo": null
 }]
