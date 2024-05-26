@@ -1,0 +1,47 @@
+[
+    {
+        "_id": {
+            "$oid": "665384e73c29175616f00a01"
+        },
+        "Nombre": "Juan Pérez",
+        "Nacionalidad": "Argentina",
+        "Experiencia": "10 años de experiencia como árbitro profesional",
+        "Categoria": "Árbitro FIFA"
+    },
+    {
+        "_id": {
+            "$oid": "665384fe3c29175616f00a02"
+        },
+        "Nombre": "Luis González",
+        "Nacionalidad": "Uruguaya",
+        "Experiencia": "8 años de experiencia como árbitro profesional",
+        "Categoria": "Árbitro nacional"
+    },
+    {
+        "_id": {
+            "$oid": "665385733c29175616f00a03"
+        },
+        "Nombre": "María Rodriguez",
+        "Nacionalidad": "Española",
+        "Experiencia": "5 años de experiencia como árbitro profesional",
+        "Categoria": "Árbitro nacional"
+    },
+    {
+        "_id": {
+            "$oid": "665385863c29175616f00a04"
+        },
+        "Nombre": "Pedro Ramirez",
+        "Nacionalidad": "Colombiana",
+        "Experiencia": "12 años de experiencia como árbitro profesional",
+        "Categoria": "Árbitro FIFA"
+    },
+    {
+        "_id": {
+            "$oid": "6653866e3c29175616f00a05"
+        },
+        "Nombre": "Ana Silva",
+        "Nacionalidad": "Brasileña",
+        "Experiencia": "6 años de experiencia como árbitro profesional",
+        "Categoria": "Árbitro nacional"
+    }
+]
