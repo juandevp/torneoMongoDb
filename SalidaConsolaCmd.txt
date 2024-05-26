@@ -1,0 +1,1177 @@
+          }
+        }
+
+        function checkCollectionCountsForDB(_db) {
+            const res = assert.commandWorked(
+                _db.runCommand({listCollections: 1, includePendingDrops: true}));
+            const collNames = new DBCommandCursor(_db, res).toArray();
+            collNames.forEach(c => checkCollectionCount(_db.getCollection(c.name)));
+        }
+
+        function checkCollectionCountsForNode(node) {
+            const dbNames = node.getDBNames();
+            dbNames.forEach(dbName => checkCollectionCountsForDB(node.getDB(dbName)));
+        }
+
+        function checkCollectionCountsForReplSet(rst) {
+            rst.nodes.forEach(node => {
+                // Arbiters have no replicated collections.
+                if (isNodeArbiter(node)) {
+                    print("checkCollectionCounts skipping counts for arbiter: " + node.host);
+                    return;
+                }
+                checkCollectionCountsForNode(node);
+            });
+            assert(success, `Collection counts did not match. search for '${errPrefix}' in logs.`);
+        }
+
+        this.checkReplicaSet(checkCollectionCountsForReplSet, null, this);
+    },
+        "start" : function(n, options, restart, wait) {
+        if (n.length) {
+            var nodes = n;
+            var started = [];
+
+            for (var i = 0; i < nodes.length; i++) {
+                if (this.start(nodes[i], Object.merge({}, options), restart, wait)) {
+                    started.push(nodes[i]);
+                }
+            }
+
+            return started;
+        }
+
+        // TODO: should we do something special if we don't currently know about this node?
+        n = this.getNodeId(n);
+
+        print("ReplSetTest n is : " + n);
+
+        var defaults = {
+            useHostName: this.useHostName,
+            oplogSize: this.oplogSize,
+            keyFile: this.keyFile,
+            port: _useBridge ? _unbridgedPorts[n] : this.ports[n],
+            replSet: this.useSeedList ? this.getURL() : this.name,
+            dbpath: "$set-$node"
+        };
+
+        //
+        // Note : this replaces the binVersion of the shared startSet() options the first time
+        // through, so the full set is guaranteed to have different versions if size > 1.  If using
+        // start() independently, independent version choices will be made
+        //
+        if (options && options.binVersion) {
+            options.binVersion = MongoRunner.versionIterator(options.binVersion);
+        }
+
+        // If restarting a node, use its existing options as the defaults.
+        var baseOptions;
+        if ((options && options.restart) || restart) {
+            baseOptions = _useBridge ? _unbridgedNodes[n].fullOptions : this.nodes[n].fullOptions;
+        } else {
+            baseOptions = defaults;
+        }
+        baseOptions = Object.merge(baseOptions, this.nodeOptions["n" + n]);
+        options = Object.merge(baseOptions, options);
+        if (options.hasOwnProperty("rsConfig")) {
+            this.nodeOptions["n" + n] =
+                Object.merge(this.nodeOptions["n" + n], {rsConfig: options.rsConfig});
+        }
+        delete options.rsConfig;
+
+        options.restart = options.restart || restart;
+
+        var pathOpts = {node: n, set: this.name};
+        options.pathOpts = Object.merge(options.pathOpts || {}, pathOpts);
+
+        // Turn off periodic noop writes for replica sets by default.
+        options.setParameter = options.setParameter || {};
+        if (typeof (options.setParameter) === "string") {
+            var eqIdx = options.setParameter.indexOf("=");
+            if (eqIdx != -1) {
+                var param = options.setParameter.substring(0, eqIdx);
+                var value = options.setParameter.substring(eqIdx + 1);
+                options.setParameter = {};
+                options.setParameter[param] = value;
+            }
+        }
+        options.setParameter.writePeriodicNoops = options.setParameter.writePeriodicNoops || false;
+
+        // We raise the number of initial sync connect attempts for tests that disallow chaining.
+        // Disabling chaining can cause sync source selection to take longer so we must increase
+        // the number of connection attempts.
+        options.setParameter.numInitialSyncConnectAttempts =
+            options.setParameter.numInitialSyncConnectAttempts || 60;
+
+        if (tojson(options) != tojson({}))
+            printjson(options);
+
+        print("ReplSetTest " + (restart ? "(Re)" : "") + "Starting....");
+
+        if (_useBridge && (restart === undefined || !restart)) {
+            // We leave the mongobridge process running when the mongod process is restarted so we
+            // don't need to start a new one.
+            var bridgeOptions = Object.merge(_bridgeOptions, options.bridgeOptions || {});
+            bridgeOptions = Object.merge(bridgeOptions, {
+                hostName: this.host,
+                port: this.ports[n],
+                // The mongod processes identify themselves to mongobridge as host:port, where the
+                // host is the actual hostname of the machine and not localhost.
+                dest: getHostName() + ":" + _unbridgedPorts[n],
+            });
+
+            if (jsTestOptions().networkMessageCompressors) {
+                bridgeOptions["networkMessageCompressors"] =
+                    jsTestOptions().networkMessageCompressors;
+            }
+
+            this.nodes[n] = new MongoBridge(bridgeOptions);
+        }
+
+        var conn = MongoRunner.runMongod(options);
+        if (!conn) {
+            throw new Error("Failed to start node " + n);
+        }
+
+        // Make sure to call _addPath, otherwise folders won't be cleaned.
+        this._addPath(conn.dbpath);
+
+        if (_useBridge) {
+            this.nodes[n].connectToBridge();
+            _unbridgedNodes[n] = conn;
+        } else {
+            this.nodes[n] = conn;
+        }
+
+        // Add replica set specific attributes.
+        this.nodes[n].nodeId = n;
+
+        printjson(this.nodes);
+
+        // Clean up after noReplSet to ensure it doesn't effect future restarts.
+        if (options.noReplSet) {
+            this.nodes[n].fullOptions.replSet = defaults.replSet;
+            delete this.nodes[n].fullOptions.noReplSet;
+        }
+
+        wait = wait || false;
+        if (!wait.toFixed) {
+            if (wait)
+                wait = 0;
+            else
+                wait = -1;
+        }
+
+        if (wait >= 0) {
+            // Wait for node to start up.
+            _waitForHealth(this.nodes[n], Health.UP, wait);
+        }
+
+        if (_causalConsistency) {
+            this.nodes[n].setCausalConsistency(true);
+        }
+
+        return this.nodes[n];
+    },
+        "restart" : function(n, options, signal, wait) {
+        // Can specify wait as third parameter, if using default signal
+        if (signal == true || signal == false) {
+            wait = signal;
+            signal = undefined;
+        }
+
+        this.stop(n, signal, options, {forRestart: true});
+
+        var started = this.start(n, options, true, wait);
+
+        if (jsTestOptions().keyFile) {
+            if (started.length) {
+                // if n was an array of conns, start will return an array of connections
+                for (var i = 0; i < started.length; i++) {
+                    assert(jsTest.authenticate(started[i]), "Failed authentication during restart");
+                }
+            } else {
+                assert(jsTest.authenticate(started), "Failed authentication during restart");
+            }
+        }
+        return started;
+    },
+        "freeze" : function(node, ...wrappedArgs) {
+            if (node.hasOwnProperty('length')) {
+                let returnValueList = [];
+                for (let i = 0; i < node.length; i++) {
+                    returnValueList.push(wrapped.call(this, node[i], ...wrappedArgs));
+                }
+
+                return returnValueList;
+            }
+
+            return wrapped.call(this, node, ...wrappedArgs);
+        },
+        "stopMaster" : function(signal, opts) {
+        var master = this.getPrimary();
+        var master_id = this.getNodeId(master);
+        return this.stop(master_id, signal, opts);
+    },
+        "stop" : function(n, signal, opts, {forRestart: forRestart = false} = {}) {
+        // Flatten array of nodes to stop
+        if (n.length) {
+            var nodes = n;
+
+            var stopped = [];
+            for (var i = 0; i < nodes.length; i++) {
+                if (this.stop(nodes[i], signal, opts))
+                    stopped.push(nodes[i]);
+            }
+
+            return stopped;
+        }
+
+        // Can specify wait as second parameter, if using default signal
+        if (signal == true || signal == false) {
+            signal = undefined;
+        }
+
+        n = this.getNodeId(n);
+
+        var conn = _useBridge ? _unbridgedNodes[n] : this.nodes[n];
+        print('ReplSetTest stop *** Shutting down mongod in port ' + conn.port + ' ***');
+        var ret = MongoRunner.stopMongod(conn, signal, opts);
+
+        print('ReplSetTest stop *** Mongod in port ' + conn.port + ' shutdown with code (' + ret +
+              ') ***');
+
+        if (_useBridge && !forRestart) {
+            // We leave the mongobridge process running when the mongod process is being restarted.
+            const bridge = this.nodes[n];
+            print('ReplSetTest stop *** Shutting down mongobridge on port ' + bridge.port + ' ***');
+            const exitCode = bridge.stop();  // calls MongoBridge#stop()
+            print('ReplSetTest stop *** mongobridge on port ' + bridge.port +
+                  ' exited with code (' + exitCode + ') ***');
+        }
+
+        return ret;
+    },
+        "stopSet" : function(signal, forRestart, opts) {
+        // Check to make sure data is the same on all nodes.
+        if (!jsTest.options().skipCheckDBHashes) {
+            print("ReplSetTest stopSet going to run data consistency checks.");
+            // To skip this check add TestData.skipCheckDBHashes = true;
+            // Reasons to skip this test include:
+            // - the primary goes down and none can be elected (so fsync lock/unlock commands fail)
+            // - the replica set is in an unrecoverable inconsistent state. E.g. the replica set
+            //   is partitioned.
+            //
+            let master = _callIsMaster();
+            if (master && this._liveNodes.length > 1) {  // skip for sets with 1 live node
+                // Auth only on live nodes because authutil.assertAuthenticate
+                // refuses to log in live connections if some secondaries are down.
+                print("ReplSetTest stopSet checking oplogs.");
+                asCluster(this._liveNodes, () => this.checkOplogs());
+                print("ReplSetTest stopSet checking replicated data hashes.");
+                asCluster(this._liveNodes, () => this.checkReplicatedDataHashes());
+            } else {
+                print(
+                    "ReplSetTest stopSet skipped data consistency checks. Number of _liveNodes: " +
+                    this._liveNodes.length + ", _callIsMaster response: " + master);
+            }
+            print("ReplSetTest stopSet finished data consistency checks.");
+        }
+
+        // Make shutdown faster in tests, especially when election handoff has no viable candidate.
+        // Ignore errors from setParameter, perhaps it's a pre-4.1.10 mongod.
+        if (_callIsMaster()) {
+            asCluster(this._liveNodes, () => {
+                for (let node of this._liveNodes) {
+                    try {
+                        print(
+                            "ReplSetTest stopSet disabling 'waitForStepDownOnNonCommandShutdown' on " +
+                            node.host);
+                        assert.commandWorked(node.adminCommand({
+                            setParameter: 1,
+                            waitForStepDownOnNonCommandShutdown: false,
+                        }));
+                    } catch (e) {
+                        print("Error in setParameter for waitForStepDownOnNonCommandShutdown:");
+                        print(e);
+                    }
+                }
+            });
+        }
+
+        print("ReplSetTest stopSet stopping all replica set nodes.");
+        for (var i = 0; i < this.ports.length; i++) {
+            this.stop(i, signal, opts);
+        }
+        print("ReplSetTest stopSet stopped all replica set nodes.");
+
+        if (forRestart) {
+            print("ReplSetTest stopSet returning since forRestart=true.");
+            return;
+        }
+
+        if ((!opts || !opts.noCleanData) && _alldbpaths) {
+            print("ReplSetTest stopSet deleting all dbpaths");
+            for (var i = 0; i < _alldbpaths.length; i++) {
+                print("ReplSetTest stopSet deleting dbpath: " + _alldbpaths[i]);
+                resetDbpath(_alldbpaths[i]);
+            }
+            print("ReplSetTest stopSet deleted all dbpaths");
+        }
+
+        _forgetReplSet(this.name);
+
+        print('ReplSetTest stopSet *** Shut down repl set - test worked ****');
+    },
+        "usesBridge" : function() {
+        return _useBridge;
+    },
+        "waitForState" : function(node, state, timeout, reconnectNode) {
+        _waitForIndicator(node, state, "state", timeout, reconnectNode);
+    },
+        "waitForMaster" : function(timeout) {
+        var master;
+        assert.soonNoExcept(function() {
+            return (master = self.getPrimary());
+        }, "waiting for master", timeout);
+
+        return master;
+    },
+        "name" : "SerReplicaSet",
+        "useHostName" : true,
+        "host" : "LAPTOP-K8JF3JJ2",
+        "oplogSize" : 40,
+        "useSeedList" : false,
+        "keyFile" : undefined,
+        "protocolVersion" : undefined,
+        "waitForKeys" : undefined,
+        "nodeOptions" : {
+                "n0" : undefined,
+                "n1" : undefined,
+                "n2" : undefined
+        },
+        "nodes" : [ ],
+        "ports" : [
+                20000,
+                20001,
+                20002
+        ]
+}
+> SerReplicaSet.startSet()
+ReplSetTest starting set
+ReplSetTest n is : 0
+{
+        "useHostName" : true,
+        "oplogSize" : 40,
+        "keyFile" : undefined,
+        "port" : 20000,
+        "replSet" : "SerReplicaSet",
+        "dbpath" : "$set-$node",
+        "restart" : undefined,
+        "pathOpts" : {
+                "node" : 0,
+                "set" : "SerReplicaSet"
+        },
+        "setParameter" : {
+                "writePeriodicNoops" : false,
+                "numInitialSyncConnectAttempts" : 60
+        }
+}
+ReplSetTest Starting....
+Resetting db path '/data/db/SerReplicaSet-0'
+2024-05-26T07:58:08.962-0500 I  -        [js] shell: started program (sh14016):  mongod.exe --oplogSize 40 --port 20000 --replSet SerReplicaSet --dbpath /data/db/SerReplicaSet-0 --setParameter writePeriodicNoops=false --setParameter numInitialSyncConnectAttempts=60 --bind_ip 0.0.0.0 --setParameter enableTestCommands=1 --setParameter disableLogicalSessionCacheRefresh=true --setParameter minNumChunksForSessionsCollection=1 --setParameter orphanCleanupDelaySecs=1
+d20000| 2024-05-26T07:58:08.998-0500 I  CONTROL  [main] Automatically disabling TLS 1.0, to force-enable TLS 1.0 specify --sslDisabledProtocols 'none'
+d20000| 2024-05-26T07:58:09.485-0500 W  ASIO     [main] No TransportLayer configured during NetworkInterface startup
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] MongoDB starting : pid=14016 port=20000 dbpath=/data/db/SerReplicaSet-0 64-bit host=LAPTOP-K8JF3JJ2
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] targetMinOS: Windows 7/Windows Server 2008 R2
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] db version v4.2.25
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] git version: 41b59c2bfb5121e66f18cc3ef40055a1b5fb6c2e
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] allocator: tcmalloc
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] modules: none
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten] build environment:
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten]     distmod: 2012plus
+d20000| 2024-05-26T07:58:09.486-0500 I  CONTROL  [initandlisten]     distarch: x86_64
+d20000| 2024-05-26T07:58:09.487-0500 I  CONTROL  [initandlisten]     target_arch: x86_64
+d20000| 2024-05-26T07:58:09.487-0500 I  CONTROL  [initandlisten] options: { net: { bindIp: "0.0.0.0", port: 20000 }, replication: { oplogSizeMB: 40, replSet: "SerReplicaSet" }, setParameter: { disableLogicalSessionCacheRefresh: "true", enableTestCommands: "1", minNumChunksForSessionsCollection: "1", numInitialSyncConnectAttempts: "60", orphanCleanupDelaySecs: "1", writePeriodicNoops: "false" }, storage: { dbPath: "/data/db/SerReplicaSet-0" } }
+d20000| 2024-05-26T07:58:09.491-0500 I  STORAGE  [initandlisten] wiredtiger_open config: create,cache_size=7637M,cache_overflow=(file_max=0M),session_max=33000,eviction=(threads_min=4,threads_max=4),config_base=false,statistics=(fast),log=(enabled=true,archive=true,path=journal,compressor=snappy),file_manager=(close_idle_time=100000,close_scan_interval=10,close_handle_minimum=250),statistics_log=(wait=0),verbose=[recovery_progress,checkpoint_progress],
+d20000| 2024-05-26T07:58:09.541-0500 I  STORAGE  [initandlisten] WiredTiger message [1716728289:540538][14016:140713325910112], txn-recover: Set global recovery timestamp: (0, 0)
+d20000| 2024-05-26T07:58:09.557-0500 I  RECOVERY [initandlisten] WiredTiger recoveryTimestamp. Ts: Timestamp(0, 0)
+d20000| 2024-05-26T07:58:09.567-0500 I  STORAGE  [initandlisten] Timestamp monitor starting
+d20000| 2024-05-26T07:58:09.579-0500 I  CONTROL  [initandlisten]
+d20000| 2024-05-26T07:58:09.579-0500 I  CONTROL  [initandlisten] ** WARNING: Access control is not enabled for the database.
+d20000| 2024-05-26T07:58:09.580-0500 I  CONTROL  [initandlisten] **          Read and write access to data and configuration is unrestricted.
+d20000| 2024-05-26T07:58:09.580-0500 I  CONTROL  [initandlisten]
+d20000| 2024-05-26T07:58:09.583-0500 I  STORAGE  [initandlisten] Flow Control is enabled on this deployment.
+d20000| 2024-05-26T07:58:09.585-0500 I  STORAGE  [initandlisten] createCollection: local.startup_log with generated UUID: b288c47b-ebe3-4cea-974e-10b6e9ba06ad and options: { capped: true, size: 10485760 }
+d20000| 2024-05-26T07:58:09.596-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.startup_log
+d20000| 2024-05-26T07:58:09.983-0500 W  FTDC     [initandlisten] Failed to initialize Performance Counters for FTDC: WindowsPdhError: PdhExpandCounterPathW failed with 'El objeto especificado no se encontr├│ en el equipo.' for counter '\Memory\Available Bytes'
+d20000| 2024-05-26T07:58:09.983-0500 I  FTDC     [initandlisten] Initializing full-time diagnostic data capture with directory '/data/db/SerReplicaSet-0/diagnostic.data'
+d20000| 2024-05-26T07:58:09.992-0500 I  STORAGE  [initandlisten] createCollection: local.replset.oplogTruncateAfterPoint with generated UUID: f46b9e7a-199b-42e0-972c-86a7774496c3 and options: {}
+d20000| 2024-05-26T07:58:10.005-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.oplogTruncateAfterPoint
+d20000| 2024-05-26T07:58:10.005-0500 W  REPL     [ftdc] Rollback ID is not initialized yet.
+d20000| 2024-05-26T07:58:10.005-0500 I  STORAGE  [initandlisten] createCollection: local.replset.minvalid with generated UUID: b294f7e2-3bd6-40c1-a8c3-d2e5f5fe1d05 and options: {}
+d20000| 2024-05-26T07:58:10.018-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.minvalid
+d20000| 2024-05-26T07:58:10.026-0500 I  STORAGE  [initandlisten] createCollection: local.replset.election with generated UUID: 3c069a5f-acea-4eed-90ab-564d6c5b5cd4 and options: {}
+d20000| 2024-05-26T07:58:10.036-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.election
+d20000| 2024-05-26T07:58:10.036-0500 I  REPL     [initandlisten] Did not find local initialized voted for document at startup.
+d20000| 2024-05-26T07:58:10.037-0500 I  REPL     [initandlisten] Did not find local Rollback ID document at startup. Creating one.
+d20000| 2024-05-26T07:58:10.037-0500 I  STORAGE  [initandlisten] createCollection: local.system.rollback.id with generated UUID: bc317657-ba03-4e0a-be9a-7e7bd9b794d8 and options: {}
+d20000| 2024-05-26T07:58:10.048-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.system.rollback.id
+d20000| 2024-05-26T07:58:10.048-0500 I  REPL     [initandlisten] Initialized the rollback ID to 1
+d20000| 2024-05-26T07:58:10.048-0500 I  REPL     [initandlisten] Did not find local replica set configuration document at startup;  NoMatchingDocument: Did not find replica set configuration document in local.system.replset
+d20000| 2024-05-26T07:58:10.051-0500 I  NETWORK  [listener] Listening on 0.0.0.0
+d20000| 2024-05-26T07:58:10.051-0500 I  NETWORK  [listener] waiting for connections on port 20000
+d20000| 2024-05-26T07:58:10.485-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:54732 #1 (1 connection now open)
+d20000| 2024-05-26T07:58:10.486-0500 I  NETWORK  [conn1] received client metadata from 127.0.0.1:54732 conn1: { application: { name: "MongoDB Shell" }, driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+[ connection to LAPTOP-K8JF3JJ2:20000 ]
+ReplSetTest n is : 1
+{
+        "useHostName" : true,
+        "oplogSize" : 40,
+        "keyFile" : undefined,
+        "port" : 20001,
+        "replSet" : "SerReplicaSet",
+        "dbpath" : "$set-$node",
+        "restart" : undefined,
+        "pathOpts" : {
+                "node" : 1,
+                "set" : "SerReplicaSet"
+        },
+        "setParameter" : {
+                "writePeriodicNoops" : false,
+                "numInitialSyncConnectAttempts" : 60
+        }
+}
+ReplSetTest Starting....
+Resetting db path '/data/db/SerReplicaSet-1'
+2024-05-26T07:58:10.497-0500 I  -        [js] shell: started program (sh5580):  mongod.exe --oplogSize 40 --port 20001 --replSet SerReplicaSet --dbpath /data/db/SerReplicaSet-1 --setParameter writePeriodicNoops=false --setParameter numInitialSyncConnectAttempts=60 --bind_ip 0.0.0.0 --setParameter enableTestCommands=1 --setParameter disableLogicalSessionCacheRefresh=true --setParameter minNumChunksForSessionsCollection=1 --setParameter orphanCleanupDelaySecs=1
+d20001| 2024-05-26T07:58:10.957-0500 I  CONTROL  [main] Automatically disabling TLS 1.0, to force-enable TLS 1.0 specify --sslDisabledProtocols 'none'
+d20001| 2024-05-26T07:58:10.961-0500 W  ASIO     [main] No TransportLayer configured during NetworkInterface startup
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] MongoDB starting : pid=5580 port=20001 dbpath=/data/db/SerReplicaSet-1 64-bit host=LAPTOP-K8JF3JJ2
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] targetMinOS: Windows 7/Windows Server 2008 R2
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] db version v4.2.25
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] git version: 41b59c2bfb5121e66f18cc3ef40055a1b5fb6c2e
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] allocator: tcmalloc
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] modules: none
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] build environment:
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten]     distmod: 2012plus
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten]     distarch: x86_64
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten]     target_arch: x86_64
+d20001| 2024-05-26T07:58:10.963-0500 I  CONTROL  [initandlisten] options: { net: { bindIp: "0.0.0.0", port: 20001 }, replication: { oplogSizeMB: 40, replSet: "SerReplicaSet" }, setParameter: { disableLogicalSessionCacheRefresh: "true", enableTestCommands: "1", minNumChunksForSessionsCollection: "1", numInitialSyncConnectAttempts: "60", orphanCleanupDelaySecs: "1", writePeriodicNoops: "false" }, storage: { dbPath: "/data/db/SerReplicaSet-1" } }
+d20001| 2024-05-26T07:58:10.964-0500 I  STORAGE  [initandlisten] wiredtiger_open config: create,cache_size=7637M,cache_overflow=(file_max=0M),session_max=33000,eviction=(threads_min=4,threads_max=4),config_base=false,statistics=(fast),log=(enabled=true,archive=true,path=journal,compressor=snappy),file_manager=(close_idle_time=100000,close_scan_interval=10,close_handle_minimum=250),statistics_log=(wait=0),verbose=[recovery_progress,checkpoint_progress],
+d20001| 2024-05-26T07:58:11.007-0500 I  STORAGE  [initandlisten] WiredTiger message [1716728291:7252][5580:140713325910112], txn-recover: Set global recovery timestamp: (0, 0)
+d20001| 2024-05-26T07:58:11.017-0500 I  RECOVERY [initandlisten] WiredTiger recoveryTimestamp. Ts: Timestamp(0, 0)
+d20001| 2024-05-26T07:58:11.035-0500 I  STORAGE  [initandlisten] Timestamp monitor starting
+d20001| 2024-05-26T07:58:11.046-0500 I  CONTROL  [initandlisten]
+d20001| 2024-05-26T07:58:11.046-0500 I  CONTROL  [initandlisten] ** WARNING: Access control is not enabled for the database.
+d20001| 2024-05-26T07:58:11.046-0500 I  CONTROL  [initandlisten] **          Read and write access to data and configuration is unrestricted.
+d20001| 2024-05-26T07:58:11.049-0500 I  CONTROL  [initandlisten]
+d20001| 2024-05-26T07:58:11.052-0500 I  STORAGE  [initandlisten] Flow Control is enabled on this deployment.
+d20001| 2024-05-26T07:58:11.053-0500 I  STORAGE  [initandlisten] createCollection: local.startup_log with generated UUID: 0e9bb426-0ff2-4989-b71e-28e34f039315 and options: { capped: true, size: 10485760 }
+d20001| 2024-05-26T07:58:11.066-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.startup_log
+d20001| 2024-05-26T07:58:11.485-0500 W  FTDC     [initandlisten] Failed to initialize Performance Counters for FTDC: WindowsPdhError: PdhExpandCounterPathW failed with 'El objeto especificado no se encontr├│ en el equipo.' for counter '\Processor(_Total)\% Idle Time'
+d20001| 2024-05-26T07:58:11.485-0500 I  FTDC     [initandlisten] Initializing full-time diagnostic data capture with directory '/data/db/SerReplicaSet-1/diagnostic.data'
+d20001| 2024-05-26T07:58:11.491-0500 I  STORAGE  [initandlisten] createCollection: local.replset.oplogTruncateAfterPoint with generated UUID: 753c57f3-d153-417e-9919-d86d82cb4f2e and options: {}
+d20001| 2024-05-26T07:58:11.503-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.oplogTruncateAfterPoint
+d20001| 2024-05-26T07:58:11.503-0500 I  STORAGE  [initandlisten] createCollection: local.replset.minvalid with generated UUID: c200d91c-164c-4747-a052-4fc71c2d2e6f and options: {}
+d20001| 2024-05-26T07:58:11.516-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.minvalid
+d20001| 2024-05-26T07:58:11.516-0500 I  STORAGE  [initandlisten] createCollection: local.replset.election with generated UUID: c5017815-7938-4f2d-929e-d8510b48f3fa and options: {}
+d20001| 2024-05-26T07:58:11.532-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.election
+d20001| 2024-05-26T07:58:11.533-0500 I  REPL     [initandlisten] Did not find local initialized voted for document at startup.
+d20001| 2024-05-26T07:58:11.533-0500 I  REPL     [initandlisten] Did not find local Rollback ID document at startup. Creating one.
+d20001| 2024-05-26T07:58:11.533-0500 I  STORAGE  [initandlisten] createCollection: local.system.rollback.id with generated UUID: 13fc2531-ff9e-4819-bf17-975cb5881ad4 and options: {}
+d20001| 2024-05-26T07:58:11.544-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.system.rollback.id
+d20001| 2024-05-26T07:58:11.544-0500 I  REPL     [initandlisten] Initialized the rollback ID to 1
+d20001| 2024-05-26T07:58:11.544-0500 I  REPL     [initandlisten] Did not find local replica set configuration document at startup;  NoMatchingDocument: Did not find replica set configuration document in local.system.replset
+d20001| 2024-05-26T07:58:11.550-0500 I  NETWORK  [listener] Listening on 0.0.0.0
+d20001| 2024-05-26T07:58:11.550-0500 I  NETWORK  [listener] waiting for connections on port 20001
+d20001| 2024-05-26T07:58:12.032-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:54735 #1 (1 connection now open)
+d20001| 2024-05-26T07:58:12.037-0500 I  NETWORK  [conn1] received client metadata from 127.0.0.1:54735 conn1: { application: { name: "MongoDB Shell" }, driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+[ connection to LAPTOP-K8JF3JJ2:20000, connection to LAPTOP-K8JF3JJ2:20001 ]
+ReplSetTest n is : 2
+{
+        "useHostName" : true,
+        "oplogSize" : 40,
+        "keyFile" : undefined,
+        "port" : 20002,
+        "replSet" : "SerReplicaSet",
+        "dbpath" : "$set-$node",
+        "restart" : undefined,
+        "pathOpts" : {
+                "node" : 2,
+                "set" : "SerReplicaSet"
+        },
+        "setParameter" : {
+                "writePeriodicNoops" : false,
+                "numInitialSyncConnectAttempts" : 60
+        }
+}
+ReplSetTest Starting....
+Resetting db path '/data/db/SerReplicaSet-2'
+2024-05-26T07:58:12.065-0500 I  -        [js] shell: started program (sh17320):  mongod.exe --oplogSize 40 --port 20002 --replSet SerReplicaSet --dbpath /data/db/SerReplicaSet-2 --setParameter writePeriodicNoops=false --setParameter numInitialSyncConnectAttempts=60 --bind_ip 0.0.0.0 --setParameter enableTestCommands=1 --setParameter disableLogicalSessionCacheRefresh=true --setParameter minNumChunksForSessionsCollection=1 --setParameter orphanCleanupDelaySecs=1
+d20002| 2024-05-26T07:58:12.108-0500 I  CONTROL  [main] Automatically disabling TLS 1.0, to force-enable TLS 1.0 specify --sslDisabledProtocols 'none'
+d20002| 2024-05-26T07:58:12.483-0500 W  ASIO     [main] No TransportLayer configured during NetworkInterface startup
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] MongoDB starting : pid=17320 port=20002 dbpath=/data/db/SerReplicaSet-2 64-bit host=LAPTOP-K8JF3JJ2
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] targetMinOS: Windows 7/Windows Server 2008 R2
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] db version v4.2.25
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] git version: 41b59c2bfb5121e66f18cc3ef40055a1b5fb6c2e
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] allocator: tcmalloc
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] modules: none
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] build environment:
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten]     distmod: 2012plus
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten]     distarch: x86_64
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten]     target_arch: x86_64
+d20002| 2024-05-26T07:58:12.485-0500 I  CONTROL  [initandlisten] options: { net: { bindIp: "0.0.0.0", port: 20002 }, replication: { oplogSizeMB: 40, replSet: "SerReplicaSet" }, setParameter: { disableLogicalSessionCacheRefresh: "true", enableTestCommands: "1", minNumChunksForSessionsCollection: "1", numInitialSyncConnectAttempts: "60", orphanCleanupDelaySecs: "1", writePeriodicNoops: "false" }, storage: { dbPath: "/data/db/SerReplicaSet-2" } }
+d20002| 2024-05-26T07:58:12.486-0500 I  STORAGE  [initandlisten] wiredtiger_open config: create,cache_size=7637M,cache_overflow=(file_max=0M),session_max=33000,eviction=(threads_min=4,threads_max=4),config_base=false,statistics=(fast),log=(enabled=true,archive=true,path=journal,compressor=snappy),file_manager=(close_idle_time=100000,close_scan_interval=10,close_handle_minimum=250),statistics_log=(wait=0),verbose=[recovery_progress,checkpoint_progress],
+d20002| 2024-05-26T07:58:12.529-0500 I  STORAGE  [initandlisten] WiredTiger message [1716728292:528814][17320:140713325910112], txn-recover: Set global recovery timestamp: (0, 0)
+d20002| 2024-05-26T07:58:12.542-0500 I  RECOVERY [initandlisten] WiredTiger recoveryTimestamp. Ts: Timestamp(0, 0)
+d20002| 2024-05-26T07:58:12.555-0500 I  STORAGE  [initandlisten] Timestamp monitor starting
+d20002| 2024-05-26T07:58:12.563-0500 I  CONTROL  [initandlisten]
+d20002| 2024-05-26T07:58:12.563-0500 I  CONTROL  [initandlisten] ** WARNING: Access control is not enabled for the database.
+d20002| 2024-05-26T07:58:12.563-0500 I  CONTROL  [initandlisten] **          Read and write access to data and configuration is unrestricted.
+d20002| 2024-05-26T07:58:12.563-0500 I  CONTROL  [initandlisten]
+d20002| 2024-05-26T07:58:12.567-0500 I  STORAGE  [initandlisten] Flow Control is enabled on this deployment.
+d20002| 2024-05-26T07:58:12.568-0500 I  STORAGE  [initandlisten] createCollection: local.startup_log with generated UUID: b87543f4-a2c9-495b-8ac4-7a9e91c1a620 and options: { capped: true, size: 10485760 }
+d20002| 2024-05-26T07:58:12.579-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.startup_log
+d20002| 2024-05-26T07:58:13.023-0500 W  FTDC     [initandlisten] Failed to initialize Performance Counters for FTDC: WindowsPdhError: PdhExpandCounterPathW failed with 'El objeto especificado no se encontr├│ en el equipo.' for counter '\Memory\Available Bytes'
+d20002| 2024-05-26T07:58:13.023-0500 I  FTDC     [initandlisten] Initializing full-time diagnostic data capture with directory '/data/db/SerReplicaSet-2/diagnostic.data'
+d20002| 2024-05-26T07:58:13.027-0500 I  STORAGE  [initandlisten] createCollection: local.replset.oplogTruncateAfterPoint with generated UUID: 7f9e02cb-14a2-4883-8318-88ebb2112c65 and options: {}
+d20002| 2024-05-26T07:58:13.041-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.oplogTruncateAfterPoint
+d20002| 2024-05-26T07:58:13.041-0500 I  STORAGE  [initandlisten] createCollection: local.replset.minvalid with generated UUID: 19821426-0e29-4b93-88ae-631f0f55af45 and options: {}
+d20002| 2024-05-26T07:58:13.051-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.minvalid
+d20002| 2024-05-26T07:58:13.051-0500 I  STORAGE  [initandlisten] createCollection: local.replset.election with generated UUID: 345beaae-798f-4cd0-8a1a-88dc675257b5 and options: {}
+d20002| 2024-05-26T07:58:13.062-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.replset.election
+d20002| 2024-05-26T07:58:13.062-0500 I  REPL     [initandlisten] Did not find local initialized voted for document at startup.
+d20002| 2024-05-26T07:58:13.062-0500 I  REPL     [initandlisten] Did not find local Rollback ID document at startup. Creating one.
+d20002| 2024-05-26T07:58:13.062-0500 I  STORAGE  [initandlisten] createCollection: local.system.rollback.id with generated UUID: 4853e6f6-bcc2-4833-9683-7591c7e2b9dc and options: {}
+d20002| 2024-05-26T07:58:13.073-0500 I  INDEX    [initandlisten] index build: done building index _id_ on ns local.system.rollback.id
+d20002| 2024-05-26T07:58:13.073-0500 I  REPL     [initandlisten] Initialized the rollback ID to 1
+d20002| 2024-05-26T07:58:13.073-0500 I  REPL     [initandlisten] Did not find local replica set configuration document at startup;  NoMatchingDocument: Did not find replica set configuration document in local.system.replset
+d20002| 2024-05-26T07:58:13.076-0500 I  NETWORK  [listener] Listening on 0.0.0.0
+d20002| 2024-05-26T07:58:13.076-0500 I  NETWORK  [listener] waiting for connections on port 20002
+d20002| 2024-05-26T07:58:13.581-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:54736 #1 (1 connection now open)
+d20002| 2024-05-26T07:58:13.582-0500 I  NETWORK  [conn1] received client metadata from 127.0.0.1:54736 conn1: { application: { name: "MongoDB Shell" }, driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+[
+        connection to LAPTOP-K8JF3JJ2:20000,
+        connection to LAPTOP-K8JF3JJ2:20001,
+        connection to LAPTOP-K8JF3JJ2:20002
+]
+[
+        connection to LAPTOP-K8JF3JJ2:20000,
+        connection to LAPTOP-K8JF3JJ2:20001,
+        connection to LAPTOP-K8JF3JJ2:20002
+]
+> SerReplicaSet.initiate()
+{
+        "replSetInitiate" : {
+                "_id" : "SerReplicaSet",
+                "protocolVersion" : 1,
+                "members" : [
+                        {
+                                "_id" : 0,
+                                "host" : "LAPTOP-K8JF3JJ2:20000"
+                        }
+                ]
+        }
+}
+d20000| 2024-05-26T08:54:25.232-0500 I  REPL     [conn1] replSetInitiate admin command received from client
+d20000| 2024-05-26T08:54:25.247-0500 I  REPL     [conn1] replSetInitiate config object with 1 members parses ok
+d20000| 2024-05-26T08:54:25.251-0500 I  REPL     [conn1] ******
+d20000| 2024-05-26T08:54:25.251-0500 I  REPL     [conn1] creating replication oplog of size: 40MB...
+d20000| 2024-05-26T08:54:25.252-0500 I  STORAGE  [conn1] createCollection: local.oplog.rs with generated UUID: 8abb0e08-fe66-46b7-b911-97ebae17c355 and options: { capped: true, size: 41943040, autoIndexId: false }
+d20000| 2024-05-26T08:54:25.266-0500 I  STORAGE  [conn1] Starting OplogTruncaterThread local.oplog.rs
+d20000| 2024-05-26T08:54:25.267-0500 I  STORAGE  [conn1] The size storer reports that the oplog contains 0 records totaling to 0 bytes
+d20000| 2024-05-26T08:54:25.267-0500 I  STORAGE  [conn1] Scanning the oplog to determine where to place markers for truncation
+d20000| 2024-05-26T08:54:25.267-0500 I  STORAGE  [conn1] WiredTiger record store oplog processing took 0ms
+d20000| 2024-05-26T08:54:25.281-0500 I  REPL     [conn1] ******
+d20000| 2024-05-26T08:54:25.281-0500 I  STORAGE  [conn1] createCollection: local.system.replset with generated UUID: ee8a6a59-ef26-4020-a408-31c444d28efa and options: {}
+d20000| 2024-05-26T08:54:25.291-0500 I  INDEX    [conn1] index build: done building index _id_ on ns local.system.replset
+d20000| 2024-05-26T08:54:25.294-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "replset.election" }
+d20000| 2024-05-26T08:54:25.295-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "oplog.rs" }
+d20000| 2024-05-26T08:54:25.295-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "startup_log" }
+d20000| 2024-05-26T08:54:25.295-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "replset.minvalid" }
+d20000| 2024-05-26T08:54:25.295-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "system.rollback.id" }
+d20000| 2024-05-26T08:54:25.295-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "system.replset" }
+d20000| 2024-05-26T08:54:25.295-0500 I  COMMAND  [conn1] CMD: collMod: { collMod: "replset.oplogTruncateAfterPoint" }
+d20000| 2024-05-26T08:54:25.295-0500 I  STORAGE  [conn1] createCollection: admin.system.version with provided UUID: 7268ddb5-adef-46b5-8f8a-87cd8e2d6c50 and options: { uuid: UUID("7268ddb5-adef-46b5-8f8a-87cd8e2d6c50") }
+d20000| 2024-05-26T08:54:25.309-0500 I  INDEX    [conn1] index build: done building index _id_ on ns admin.system.version
+d20000| 2024-05-26T08:54:25.309-0500 I  COMMAND  [conn1] setting featureCompatibilityVersion to 4.2
+d20000| 2024-05-26T08:54:25.309-0500 I  NETWORK  [conn1] Skip closing connection for connection # 1
+d20000| 2024-05-26T08:54:25.310-0500 I  REPL     [conn1] New replica set config in use: { _id: "SerReplicaSet", version: 1, protocolVersion: 1, writeConcernMajorityJournalDefault: true, members: [ { _id: 0, host: "LAPTOP-K8JF3JJ2:20000", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 } ], settings: { chainingAllowed: true, heartbeatIntervalMillis: 2000, heartbeatTimeoutSecs: 10, electionTimeoutMillis: 10000, catchUpTimeoutMillis: -1, catchUpTakeoverDelayMillis: 30000, getLastErrorModes: {}, getLastErrorDefaults: { w: 1, wtimeout: 0 }, replicaSetId: ObjectId('66533f118c6d8d10085c7f31') } }
+d20000| 2024-05-26T08:54:25.310-0500 I  REPL     [conn1] This node is LAPTOP-K8JF3JJ2:20000 in the config
+d20000| 2024-05-26T08:54:25.310-0500 I  REPL     [conn1] transition to STARTUP2 from STARTUP
+d20000| 2024-05-26T08:54:25.311-0500 I  REPL     [conn1] Starting replication storage threads
+d20000| 2024-05-26T08:54:25.315-0500 I  REPL     [conn1] transition to RECOVERING from STARTUP2
+d20000| 2024-05-26T08:54:25.316-0500 I  REPL     [conn1] Starting replication fetcher thread
+d20000| 2024-05-26T08:54:25.317-0500 I  REPL     [conn1] Starting replication applier thread
+d20000| 2024-05-26T08:54:25.317-0500 I  REPL     [conn1] Starting replication reporter thread
+d20000| 2024-05-26T08:54:25.318-0500 I  REPL     [rsSync-0] Starting oplog application
+d20000| 2024-05-26T08:54:25.319-0500 I  REPL     [rsSync-0] transition to SECONDARY from RECOVERING
+d20000| 2024-05-26T08:54:25.321-0500 I  ELECTION [rsSync-0] conducting a dry run election to see if we could be elected. current term: 0
+d20000| 2024-05-26T08:54:25.321-0500 I  ELECTION [replexec-0] dry election run succeeded, running for election in term 1
+d20000| 2024-05-26T08:54:25.325-0500 I  ELECTION [replexec-0] election succeeded, assuming primary role in term 1
+d20000| 2024-05-26T08:54:25.325-0500 I  REPL     [replexec-0] transition to PRIMARY from SECONDARY
+d20000| 2024-05-26T08:54:25.325-0500 I  REPL     [replexec-0] Resetting sync source to empty, which was :27017
+d20000| 2024-05-26T08:54:25.325-0500 I  REPL     [replexec-0] Entering primary catch-up mode.
+d20000| 2024-05-26T08:54:25.325-0500 I  REPL     [replexec-0] Exited primary catch-up mode.
+d20000| 2024-05-26T08:54:25.325-0500 I  REPL     [replexec-0] Stopping replication producer
+d20000| 2024-05-26T08:54:25.325-0500 I  REPL     [ReplBatcher] Oplog buffer has been drained in term 1
+d20000| 2024-05-26T08:54:25.327-0500 I  REPL     [RstlKillOpThread] Starting to kill user operations
+d20000| 2024-05-26T08:54:25.327-0500 I  REPL     [RstlKillOpThread] Stopped killing user operations
+d20000| 2024-05-26T08:54:25.327-0500 I  REPL     [RstlKillOpThread] State transition ops metrics: { lastStateTransition: "stepUp", userOpsKilled: 0, userOpsRunning: 0 }
+d20000| 2024-05-26T08:54:25.328-0500 I  STORAGE  [rsSync-0] createCollection: config.transactions with generated UUID: edb39b7d-6f38-4a35-9918-18a52a1825ea and options: {}
+d20000| 2024-05-26T08:54:25.340-0500 I  INDEX    [rsSync-0] index build: done building index _id_ on ns config.transactions
+d20000| 2024-05-26T08:54:25.340-0500 I  STORAGE  [rsSync-0] createCollection: config.image_collection with generated UUID: c772a723-c970-4a37-bea3-c203f2295d2f and options: {}
+d20000| 2024-05-26T08:54:25.350-0500 I  INDEX    [rsSync-0] index build: done building index _id_ on ns config.image_collection
+d20000| 2024-05-26T08:54:25.353-0500 I  REPL     [rsSync-0] transition to primary complete; database writes are now permitted
+d20000| 2024-05-26T08:54:25.355-0500 I  STORAGE  [monitoring-keys-for-HMAC] createCollection: admin.system.keys with generated UUID: afdcc23e-f490-444a-bc92-19595a3b63ab and options: {}
+d20000| 2024-05-26T08:54:25.365-0500 I  INDEX    [monitoring-keys-for-HMAC] index build: done building index _id_ on ns admin.system.keys
+d20000| 2024-05-26T08:54:25.368-0500 I  STORAGE  [monitoring-keys-for-HMAC] Triggering the first stable checkpoint. Initial Data: Timestamp(1716731665, 1) PrevStable: Timestamp(0, 0) CurrStable: Timestamp(1716731665, 7)
+Reconfiguring replica set to add in other nodes
+{
+        "replSetReconfig" : {
+                "_id" : "SerReplicaSet",
+                "protocolVersion" : 1,
+                "members" : [
+                        {
+                                "_id" : 0,
+                                "host" : "LAPTOP-K8JF3JJ2:20000"
+                        },
+                        {
+                                "_id" : 1,
+                                "host" : "LAPTOP-K8JF3JJ2:20001"
+                        },
+                        {
+                                "_id" : 2,
+                                "host" : "LAPTOP-K8JF3JJ2:20002"
+                        }
+                ],
+                "version" : 2
+        }
+}
+d20000| 2024-05-26T08:54:25.529-0500 I  REPL     [conn1] replSetReconfig admin command received from client; new config: { _id: "SerReplicaSet", protocolVersion: 1.0, members: [ { _id: 0.0, host: "LAPTOP-K8JF3JJ2:20000" }, { _id: 1.0, host: "LAPTOP-K8JF3JJ2:20001" }, { _id: 2.0, host: "LAPTOP-K8JF3JJ2:20002" } ], version: 2.0 }
+d20001| 2024-05-26T08:54:25.535-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56289 #2 (2 connections now open)
+d20001| 2024-05-26T08:54:25.536-0500 I  NETWORK  [conn2] end connection 192.168.56.1:56289 (1 connection now open)
+d20002| 2024-05-26T08:54:25.537-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56290 #2 (2 connections now open)
+d20000| 2024-05-26T08:54:25.538-0500 I  REPL     [conn1] replSetReconfig config object with 3 members parses ok
+d20002| 2024-05-26T08:54:25.538-0500 I  NETWORK  [conn2] end connection 192.168.56.1:56290 (1 connection now open)
+d20000| 2024-05-26T08:54:25.538-0500 I  REPL     [conn1] Scheduling remote command request for reconfig quorum check: RemoteCommand 1 -- target:LAPTOP-K8JF3JJ2:20001 db:admin cmd:{ replSetHeartbeat: "SerReplicaSet", configVersion: 2, hbv: 1, from: "LAPTOP-K8JF3JJ2:20000", fromId: 0, term: 1 }
+d20000| 2024-05-26T08:54:25.540-0500 I  REPL     [conn1] Scheduling remote command request for reconfig quorum check: RemoteCommand 2 -- target:LAPTOP-K8JF3JJ2:20002 db:admin cmd:{ replSetHeartbeat: "SerReplicaSet", configVersion: 2, hbv: 1, from: "LAPTOP-K8JF3JJ2:20000", fromId: 0, term: 1 }
+d20000| 2024-05-26T08:54:25.540-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20001
+d20000| 2024-05-26T08:54:25.543-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20002
+d20001| 2024-05-26T08:54:25.543-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56291 #3 (2 connections now open)
+d20002| 2024-05-26T08:54:25.545-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56292 #3 (2 connections now open)
+d20001| 2024-05-26T08:54:25.545-0500 I  NETWORK  [conn3] received client metadata from 192.168.56.1:56291 conn3: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20002| 2024-05-26T08:54:25.547-0500 I  NETWORK  [conn3] received client metadata from 192.168.56.1:56292 conn3: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20001| 2024-05-26T08:54:25.548-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T08:54:25.548-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20000| 2024-05-26T08:54:25.550-0500 I  REPL     [conn1] New replica set config in use: { _id: "SerReplicaSet", version: 2, protocolVersion: 1, writeConcernMajorityJournalDefault: true, members: [ { _id: 0, host: "LAPTOP-K8JF3JJ2:20000", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 }, { _id: 1, host: "LAPTOP-K8JF3JJ2:20001", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 }, { _id: 2, host: "LAPTOP-K8JF3JJ2:20002", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 } ], settings: { chainingAllowed: true, heartbeatIntervalMillis: 2000, heartbeatTimeoutSecs: 10, electionTimeoutMillis: 10000, catchUpTimeoutMillis: -1, catchUpTakeoverDelayMillis: 30000, getLastErrorModes: {}, getLastErrorDefaults: { w: 1, wtimeout: 0 }, replicaSetId: ObjectId('66533f118c6d8d10085c7f31') } }
+d20000| 2024-05-26T08:54:25.550-0500 I  REPL     [conn1] This node is LAPTOP-K8JF3JJ2:20000 in the config
+d20002| 2024-05-26T08:54:25.552-0500 I  NETWORK  [conn3] end connection 192.168.56.1:56292 (1 connection now open)
+d20000| 2024-05-26T08:54:25.551-0500 I  CONNPOOL [Replication] Ending connection to host LAPTOP-K8JF3JJ2:20002 due to bad connection status: CallbackCanceled: Callback was canceled; 1 connections to that host remain open
+d20002| 2024-05-26T08:54:25.554-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56293 #4 (2 connections now open)
+d20000| 2024-05-26T08:54:25.552-0500 I  REPL     [replexec-2] Member LAPTOP-K8JF3JJ2:20001 is now in state STARTUP
+d20002| 2024-05-26T08:54:25.557-0500 I  NETWORK  [conn4] received client metadata from 192.168.56.1:56293 conn4: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:25.557-0500 I  REPL     [replexec-0] Member LAPTOP-K8JF3JJ2:20002 is now in state STARTUP
+d20000| 2024-05-26T08:54:25.559-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56294 #7 (2 connections now open)
+d20000| 2024-05-26T08:54:25.560-0500 I  NETWORK  [conn7] received client metadata from 192.168.56.1:56294 conn7: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:25.560-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56295 #8 (3 connections now open)
+d20000| 2024-05-26T08:54:25.561-0500 I  NETWORK  [conn8] received client metadata from 192.168.56.1:56295 conn8: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:25.562-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56296 #9 (4 connections now open)
+d20000| 2024-05-26T08:54:25.564-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56297 #10 (5 connections now open)
+d20000| 2024-05-26T08:54:25.564-0500 I  NETWORK  [conn9] end connection 192.168.56.1:56296 (4 connections now open)
+d20000| 2024-05-26T08:54:25.566-0500 I  NETWORK  [conn10] end connection 192.168.56.1:56297 (3 connections now open)
+d20001| 2024-05-26T08:54:25.567-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56298 #6 (3 connections now open)
+d20001| 2024-05-26T08:54:25.571-0500 I  NETWORK  [conn6] end connection 192.168.56.1:56298 (2 connections now open)
+d20002| 2024-05-26T08:54:25.575-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56299 #8 (3 connections now open)
+d20002| 2024-05-26T08:54:25.575-0500 I  STORAGE  [replexec-0] createCollection: local.system.replset with generated UUID: fcd59a30-e52e-4b37-a6e6-929638dbcd99 and options: {}
+d20002| 2024-05-26T08:54:25.576-0500 I  NETWORK  [conn8] end connection 192.168.56.1:56299 (2 connections now open)
+d20001| 2024-05-26T08:54:25.576-0500 I  STORAGE  [replexec-0] createCollection: local.system.replset with generated UUID: 0cc9f3f4-caee-43a8-a6e2-a9b214e4f7ab and options: {}
+d20002| 2024-05-26T08:54:25.590-0500 I  INDEX    [replexec-0] index build: done building index _id_ on ns local.system.replset
+d20001| 2024-05-26T08:54:25.590-0500 I  INDEX    [replexec-0] index build: done building index _id_ on ns local.system.replset
+d20001| 2024-05-26T08:54:25.591-0500 I  REPL     [replexec-0] New replica set config in use: { _id: "SerReplicaSet", version: 2, protocolVersion: 1, writeConcernMajorityJournalDefault: true, members: [ { _id: 0, host: "LAPTOP-K8JF3JJ2:20000", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 }, { _id: 1, host: "LAPTOP-K8JF3JJ2:20001", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 }, { _id: 2, host: "LAPTOP-K8JF3JJ2:20002", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 } ], settings: { chainingAllowed: true, heartbeatIntervalMillis: 2000, heartbeatTimeoutSecs: 10, electionTimeoutMillis: 10000, catchUpTimeoutMillis: -1, catchUpTakeoverDelayMillis: 30000, getLastErrorModes: {}, getLastErrorDefaults: { w: 1, wtimeout: 0 }, replicaSetId: ObjectId('66533f118c6d8d10085c7f31') } }
+d20002| 2024-05-26T08:54:25.591-0500 I  REPL     [replexec-0] New replica set config in use: { _id: "SerReplicaSet", version: 2, protocolVersion: 1, writeConcernMajorityJournalDefault: true, members: [ { _id: 0, host: "LAPTOP-K8JF3JJ2:20000", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 }, { _id: 1, host: "LAPTOP-K8JF3JJ2:20001", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 }, { _id: 2, host: "LAPTOP-K8JF3JJ2:20002", arbiterOnly: false, buildIndexes: true, hidden: false, priority: 1.0, tags: {}, slaveDelay: 0, votes: 1 } ], settings: { chainingAllowed: true, heartbeatIntervalMillis: 2000, heartbeatTimeoutSecs: 10, electionTimeoutMillis: 10000, catchUpTimeoutMillis: -1, catchUpTakeoverDelayMillis: 30000, getLastErrorModes: {}, getLastErrorDefaults: { w: 1, wtimeout: 0 }, replicaSetId: ObjectId('66533f118c6d8d10085c7f31') } }
+d20002| 2024-05-26T08:54:25.591-0500 I  REPL     [replexec-0] This node is LAPTOP-K8JF3JJ2:20002 in the config
+d20001| 2024-05-26T08:54:25.591-0500 I  REPL     [replexec-0] This node is LAPTOP-K8JF3JJ2:20001 in the config
+d20001| 2024-05-26T08:54:25.591-0500 I  REPL     [replexec-0] transition to STARTUP2 from STARTUP
+d20001| 2024-05-26T08:54:25.594-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20002
+d20002| 2024-05-26T08:54:25.592-0500 I  REPL     [replexec-0] transition to STARTUP2 from STARTUP
+d20001| 2024-05-26T08:54:25.594-0500 I  REPL     [replexec-0] Starting replication storage threads
+d20001| 2024-05-26T08:54:25.596-0500 I  REPL     [replexec-1] Member LAPTOP-K8JF3JJ2:20000 is now in state PRIMARY
+d20002| 2024-05-26T08:54:25.596-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56300 #9 (3 connections now open)
+d20002| 2024-05-26T08:54:25.597-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20001
+d20001| 2024-05-26T08:54:25.598-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56301 #9 (3 connections now open)
+d20002| 2024-05-26T08:54:25.597-0500 I  REPL     [replexec-0] Starting replication storage threads
+d20002| 2024-05-26T08:54:25.597-0500 I  REPL     [replexec-1] Member LAPTOP-K8JF3JJ2:20000 is now in state PRIMARY
+d20002| 2024-05-26T08:54:25.600-0500 I  NETWORK  [conn9] received client metadata from 192.168.56.1:56300 conn9: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20002| 2024-05-26T08:54:25.603-0500 I  REPL     [replexec-2] Member LAPTOP-K8JF3JJ2:20001 is now in state STARTUP2
+d20002| 2024-05-26T08:54:25.604-0500 I  STORAGE  [replexec-0] createCollection: local.temp_oplog_buffer with generated UUID: 9cd0c218-f5a5-448b-aec6-0e87c6d34fee and options: { temp: true }
+d20001| 2024-05-26T08:54:25.601-0500 I  REPL     [replexec-2] Member LAPTOP-K8JF3JJ2:20002 is now in state STARTUP2
+d20001| 2024-05-26T08:54:25.602-0500 I  NETWORK  [conn9] received client metadata from 192.168.56.1:56301 conn9: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20001| 2024-05-26T08:54:25.604-0500 I  STORAGE  [replexec-0] createCollection: local.temp_oplog_buffer with generated UUID: 71846c45-4136-4e05-a865-e28621e434f6 and options: { temp: true }
+d20002| 2024-05-26T08:54:25.615-0500 I  INDEX    [replexec-0] index build: done building index _id_ on ns local.temp_oplog_buffer
+d20002| 2024-05-26T08:54:25.616-0500 I  INITSYNC [replication-0] Starting initial sync (attempt 1 of 10)
+d20001| 2024-05-26T08:54:25.617-0500 I  INDEX    [replexec-0] index build: done building index _id_ on ns local.temp_oplog_buffer
+d20002| 2024-05-26T08:54:25.616-0500 I  STORAGE  [replication-0] Finishing collection drop for local.temp_oplog_buffer (9cd0c218-f5a5-448b-aec6-0e87c6d34fee).
+d20001| 2024-05-26T08:54:25.617-0500 I  INITSYNC [replication-0] Starting initial sync (attempt 1 of 10)
+d20001| 2024-05-26T08:54:25.617-0500 I  STORAGE  [replication-0] Finishing collection drop for local.temp_oplog_buffer (71846c45-4136-4e05-a865-e28621e434f6).
+d20002| 2024-05-26T08:54:25.621-0500 I  STORAGE  [replication-0] createCollection: local.temp_oplog_buffer with generated UUID: 5900b122-0ab4-4973-b499-e98e4f9eb247 and options: { temp: true }
+d20001| 2024-05-26T08:54:25.622-0500 I  STORAGE  [replication-0] createCollection: local.temp_oplog_buffer with generated UUID: 61dc365b-2ecc-4778-abbd-636d6ad5d90a and options: { temp: true }
+d20002| 2024-05-26T08:54:25.633-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns local.temp_oplog_buffer
+d20002| 2024-05-26T08:54:25.633-0500 I  REPL     [replication-0] waiting for 2 pings from other members before syncing
+d20001| 2024-05-26T08:54:25.634-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns local.temp_oplog_buffer
+d20001| 2024-05-26T08:54:25.634-0500 I  REPL     [replication-0] waiting for 2 pings from other members before syncing
+d20002| 2024-05-26T08:54:26.634-0500 I  REPL     [replication-1] sync source candidate: LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T08:54:26.634-0500 I  INITSYNC [replication-1] Initial syncer oplog truncation finished in: 0ms
+d20001| 2024-05-26T08:54:26.636-0500 I  REPL     [replication-1] sync source candidate: LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T08:54:26.634-0500 I  REPL     [replication-1] ******
+d20001| 2024-05-26T08:54:26.636-0500 I  INITSYNC [replication-1] Initial syncer oplog truncation finished in: 0ms
+d20002| 2024-05-26T08:54:26.634-0500 I  REPL     [replication-1] creating replication oplog of size: 40MB...
+d20002| 2024-05-26T08:54:26.634-0500 I  STORAGE  [replication-1] createCollection: local.oplog.rs with generated UUID: 8da10fbd-0067-424d-b21f-47a8e2a46cca and options: { capped: true, size: 41943040, autoIndexId: false }
+d20001| 2024-05-26T08:54:26.636-0500 I  REPL     [replication-1] ******
+d20001| 2024-05-26T08:54:26.636-0500 I  REPL     [replication-1] creating replication oplog of size: 40MB...
+d20001| 2024-05-26T08:54:26.636-0500 I  STORAGE  [replication-1] createCollection: local.oplog.rs with generated UUID: 51f840a1-796e-4298-8b87-882f445d1d62 and options: { capped: true, size: 41943040, autoIndexId: false }
+d20002| 2024-05-26T08:54:26.644-0500 I  STORAGE  [replication-1] Starting OplogTruncaterThread local.oplog.rs
+d20001| 2024-05-26T08:54:26.645-0500 I  STORAGE  [replication-1] Starting OplogTruncaterThread local.oplog.rs
+d20002| 2024-05-26T08:54:26.645-0500 I  STORAGE  [replication-1] The size storer reports that the oplog contains 0 records totaling to 0 bytes
+d20001| 2024-05-26T08:54:26.646-0500 I  STORAGE  [replication-1] The size storer reports that the oplog contains 0 records totaling to 0 bytes
+d20001| 2024-05-26T08:54:26.646-0500 I  STORAGE  [replication-1] Scanning the oplog to determine where to place markers for truncation
+d20002| 2024-05-26T08:54:26.645-0500 I  STORAGE  [replication-1] Scanning the oplog to determine where to place markers for truncation
+d20002| 2024-05-26T08:54:26.645-0500 I  STORAGE  [replication-1] WiredTiger record store oplog processing took 0ms
+d20001| 2024-05-26T08:54:26.646-0500 I  STORAGE  [replication-1] WiredTiger record store oplog processing took 0ms
+d20001| 2024-05-26T08:54:26.667-0500 I  REPL     [replication-1] ******
+d20001| 2024-05-26T08:54:26.668-0500 I  REPL     [replication-1] dropReplicatedDatabases - dropping 1 databases
+d20001| 2024-05-26T08:54:26.668-0500 I  REPL     [replication-1] dropReplicatedDatabases - dropped 1 databases
+d20002| 2024-05-26T08:54:26.668-0500 I  REPL     [replication-1] ******
+d20001| 2024-05-26T08:54:26.668-0500 I  CONNPOOL [RS] Connecting to LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T08:54:26.668-0500 I  REPL     [replication-1] dropReplicatedDatabases - dropping 1 databases
+d20002| 2024-05-26T08:54:26.669-0500 I  REPL     [replication-1] dropReplicatedDatabases - dropped 1 databases
+d20002| 2024-05-26T08:54:26.669-0500 I  CONNPOOL [RS] Connecting to LAPTOP-K8JF3JJ2:20000
+d20000| 2024-05-26T08:54:26.672-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56302 #11 (4 connections now open)
+d20000| 2024-05-26T08:54:26.673-0500 I  NETWORK  [conn11] received client metadata from 192.168.56.1:56302 conn11: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.673-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56303 #12 (5 connections now open)
+d20000| 2024-05-26T08:54:26.674-0500 I  NETWORK  [conn12] received client metadata from 192.168.56.1:56303 conn12: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.681-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56304 #13 (6 connections now open)
+d20000| 2024-05-26T08:54:26.685-0500 I  NETWORK  [conn13] received client metadata from 192.168.56.1:56304 conn13: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.685-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56305 #14 (7 connections now open)
+d20000| 2024-05-26T08:54:26.686-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56306 #15 (8 connections now open)
+d20000| 2024-05-26T08:54:26.686-0500 I  NETWORK  [conn14] received client metadata from 192.168.56.1:56305 conn14: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.687-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56307 #16 (9 connections now open)
+d20000| 2024-05-26T08:54:26.688-0500 I  NETWORK  [conn15] received client metadata from 192.168.56.1:56306 conn15: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.689-0500 I  NETWORK  [conn16] received client metadata from 192.168.56.1:56307 conn16: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.689-0500 I  NETWORK  [conn13] end connection 192.168.56.1:56304 (8 connections now open)
+d20000| 2024-05-26T08:54:26.689-0500 I  NETWORK  [conn14] end connection 192.168.56.1:56305 (7 connections now open)
+d20002| 2024-05-26T08:54:26.690-0500 I  INITSYNC [replication-1] CollectionCloner::start called, on ns:admin.system.version
+d20001| 2024-05-26T08:54:26.690-0500 I  INITSYNC [replication-1] CollectionCloner::start called, on ns:admin.system.version
+d20001| 2024-05-26T08:54:26.691-0500 I  STORAGE  [repl-writer-worker-0] createCollection: admin.system.version with provided UUID: 7268ddb5-adef-46b5-8f8a-87cd8e2d6c50 and options: { uuid: UUID("7268ddb5-adef-46b5-8f8a-87cd8e2d6c50") }
+d20002| 2024-05-26T08:54:26.692-0500 I  STORAGE  [repl-writer-worker-0] createCollection: admin.system.version with provided UUID: 7268ddb5-adef-46b5-8f8a-87cd8e2d6c50 and options: { uuid: UUID("7268ddb5-adef-46b5-8f8a-87cd8e2d6c50") }
+d20002| 2024-05-26T08:54:26.707-0500 I  INDEX    [repl-writer-worker-0] index build: starting on admin.system.version properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "admin.system.version" } using method: Foreground
+d20001| 2024-05-26T08:54:26.707-0500 I  INDEX    [repl-writer-worker-0] index build: starting on admin.system.version properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "admin.system.version" } using method: Foreground
+d20002| 2024-05-26T08:54:26.707-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20001| 2024-05-26T08:54:26.707-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20000| 2024-05-26T08:54:26.708-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56308 #17 (8 connections now open)
+d20000| 2024-05-26T08:54:26.709-0500 I  NETWORK  [conn17] received client metadata from 192.168.56.1:56308 conn17: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.709-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56309 #18 (9 connections now open)
+d20001| 2024-05-26T08:54:26.714-0500 I  COMMAND  [repl-writer-worker-0] setting featureCompatibilityVersion to 4.2
+d20000| 2024-05-26T08:54:26.710-0500 I  NETWORK  [conn18] received client metadata from 192.168.56.1:56309 conn18: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20001| 2024-05-26T08:54:26.714-0500 I  NETWORK  [repl-writer-worker-0] Skip closing connection for connection # 9
+d20002| 2024-05-26T08:54:26.716-0500 I  COMMAND  [repl-writer-worker-0] setting featureCompatibilityVersion to 4.2
+d20000| 2024-05-26T08:54:26.715-0500 I  NETWORK  [conn17] end connection 192.168.56.1:56308 (8 connections now open)
+d20001| 2024-05-26T08:54:26.714-0500 I  NETWORK  [repl-writer-worker-0] Skip closing connection for connection # 3
+d20002| 2024-05-26T08:54:26.716-0500 I  NETWORK  [repl-writer-worker-0] Skip closing connection for connection # 9
+d20002| 2024-05-26T08:54:26.717-0500 I  NETWORK  [repl-writer-worker-0] Skip closing connection for connection # 4
+d20002| 2024-05-26T08:54:26.717-0500 I  NETWORK  [repl-writer-worker-0] Skip closing connection for connection # 1
+d20002| 2024-05-26T08:54:26.717-0500 I  INITSYNC [replication-0] CollectionCloner ns:admin.system.version finished cloning with status: OK
+d20001| 2024-05-26T08:54:26.715-0500 I  NETWORK  [repl-writer-worker-0] Skip closing connection for connection # 1
+d20001| 2024-05-26T08:54:26.715-0500 I  INITSYNC [replication-0] CollectionCloner ns:admin.system.version finished cloning with status: OK
+d20002| 2024-05-26T08:54:26.719-0500 I  INDEX    [replication-0] index build: inserted 1 keys from external sorter into index in 0 seconds
+d20000| 2024-05-26T08:54:26.717-0500 I  NETWORK  [conn18] end connection 192.168.56.1:56309 (7 connections now open)
+d20001| 2024-05-26T08:54:26.718-0500 I  INDEX    [replication-0] index build: inserted 1 keys from external sorter into index in 0 seconds
+d20002| 2024-05-26T08:54:26.721-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns admin.system.version
+d20001| 2024-05-26T08:54:26.721-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns admin.system.version
+d20002| 2024-05-26T08:54:26.722-0500 I  INITSYNC [replication-0] CollectionCloner::start called, on ns:admin.system.keys
+d20001| 2024-05-26T08:54:26.722-0500 I  INITSYNC [replication-0] CollectionCloner::start called, on ns:admin.system.keys
+d20001| 2024-05-26T08:54:26.723-0500 I  STORAGE  [repl-writer-worker-0] createCollection: admin.system.keys with provided UUID: afdcc23e-f490-444a-bc92-19595a3b63ab and options: { uuid: UUID("afdcc23e-f490-444a-bc92-19595a3b63ab") }
+d20002| 2024-05-26T08:54:26.723-0500 I  STORAGE  [repl-writer-worker-0] createCollection: admin.system.keys with provided UUID: afdcc23e-f490-444a-bc92-19595a3b63ab and options: { uuid: UUID("afdcc23e-f490-444a-bc92-19595a3b63ab") }
+d20001| 2024-05-26T08:54:26.752-0500 I  INDEX    [repl-writer-worker-0] index build: starting on admin.system.keys properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "admin.system.keys" } using method: Hybrid
+d20001| 2024-05-26T08:54:26.752-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20000| 2024-05-26T08:54:26.753-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56310 #19 (8 connections now open)
+d20002| 2024-05-26T08:54:26.754-0500 I  INDEX    [repl-writer-worker-0] index build: starting on admin.system.keys properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "admin.system.keys" } using method: Hybrid
+d20002| 2024-05-26T08:54:26.754-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20000| 2024-05-26T08:54:26.754-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56311 #20 (9 connections now open)
+d20000| 2024-05-26T08:54:26.755-0500 I  NETWORK  [conn19] received client metadata from 192.168.56.1:56310 conn19: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.755-0500 I  NETWORK  [conn20] received client metadata from 192.168.56.1:56311 conn20: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20002| 2024-05-26T08:54:26.758-0500 I  INITSYNC [replication-0] CollectionCloner ns:admin.system.keys finished cloning with status: OK
+d20001| 2024-05-26T08:54:26.759-0500 I  INITSYNC [replication-1] CollectionCloner ns:admin.system.keys finished cloning with status: OK
+d20000| 2024-05-26T08:54:26.758-0500 I  NETWORK  [conn20] end connection 192.168.56.1:56311 (8 connections now open)
+d20000| 2024-05-26T08:54:26.759-0500 I  NETWORK  [conn19] end connection 192.168.56.1:56310 (7 connections now open)
+d20001| 2024-05-26T08:54:26.763-0500 I  INDEX    [replication-1] index build: inserted 2 keys from external sorter into index in 0 seconds
+d20002| 2024-05-26T08:54:26.763-0500 I  INDEX    [replication-0] index build: inserted 2 keys from external sorter into index in 0 seconds
+d20002| 2024-05-26T08:54:26.765-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns admin.system.keys
+d20001| 2024-05-26T08:54:26.766-0500 I  INDEX    [replication-1] index build: done building index _id_ on ns admin.system.keys
+d20002| 2024-05-26T08:54:26.772-0500 I  INITSYNC [replication-1] CollectionCloner::start called, on ns:config.image_collection
+d20002| 2024-05-26T08:54:26.773-0500 I  STORAGE  [repl-writer-worker-0] createCollection: config.image_collection with provided UUID: c772a723-c970-4a37-bea3-c203f2295d2f and options: { uuid: UUID("c772a723-c970-4a37-bea3-c203f2295d2f") }
+d20001| 2024-05-26T08:54:26.777-0500 I  INITSYNC [replication-0] CollectionCloner::start called, on ns:config.image_collection
+d20001| 2024-05-26T08:54:26.779-0500 I  STORAGE  [repl-writer-worker-0] createCollection: config.image_collection with provided UUID: c772a723-c970-4a37-bea3-c203f2295d2f and options: { uuid: UUID("c772a723-c970-4a37-bea3-c203f2295d2f") }
+d20002| 2024-05-26T08:54:26.801-0500 I  INDEX    [repl-writer-worker-0] index build: starting on config.image_collection properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "config.image_collection" } using method: Hybrid
+d20002| 2024-05-26T08:54:26.801-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20000| 2024-05-26T08:54:26.802-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56312 #21 (8 connections now open)
+d20001| 2024-05-26T08:54:26.803-0500 I  INDEX    [repl-writer-worker-0] index build: starting on config.image_collection properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "config.image_collection" } using method: Hybrid
+d20001| 2024-05-26T08:54:26.803-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20000| 2024-05-26T08:54:26.804-0500 I  NETWORK  [conn21] received client metadata from 192.168.56.1:56312 conn21: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.804-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56313 #22 (9 connections now open)
+d20002| 2024-05-26T08:54:26.807-0500 I  INITSYNC [replication-0] CollectionCloner ns:config.image_collection finished cloning with status: OK
+d20000| 2024-05-26T08:54:26.806-0500 I  NETWORK  [conn22] received client metadata from 192.168.56.1:56313 conn22: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.807-0500 I  NETWORK  [conn21] end connection 192.168.56.1:56312 (8 connections now open)
+d20002| 2024-05-26T08:54:26.810-0500 I  INDEX    [replication-0] index build: inserted 0 keys from external sorter into index in 0 seconds
+d20002| 2024-05-26T08:54:26.812-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns config.image_collection
+d20001| 2024-05-26T08:54:26.812-0500 I  INITSYNC [replication-1] CollectionCloner ns:config.image_collection finished cloning with status: OK
+d20000| 2024-05-26T08:54:26.812-0500 I  NETWORK  [conn22] end connection 192.168.56.1:56313 (7 connections now open)
+d20002| 2024-05-26T08:54:26.816-0500 I  INITSYNC [replication-0] CollectionCloner::start called, on ns:config.transactions
+d20002| 2024-05-26T08:54:26.818-0500 I  STORAGE  [repl-writer-worker-0] createCollection: config.transactions with provided UUID: edb39b7d-6f38-4a35-9918-18a52a1825ea and options: { uuid: UUID("edb39b7d-6f38-4a35-9918-18a52a1825ea") }
+d20001| 2024-05-26T08:54:26.823-0500 I  INDEX    [replication-1] index build: inserted 0 keys from external sorter into index in 0 seconds
+d20001| 2024-05-26T08:54:26.824-0500 I  INDEX    [replication-1] index build: done building index _id_ on ns config.image_collection
+d20001| 2024-05-26T08:54:26.828-0500 I  INITSYNC [replication-1] CollectionCloner::start called, on ns:config.transactions
+d20001| 2024-05-26T08:54:26.829-0500 I  STORAGE  [repl-writer-worker-0] createCollection: config.transactions with provided UUID: edb39b7d-6f38-4a35-9918-18a52a1825ea and options: { uuid: UUID("edb39b7d-6f38-4a35-9918-18a52a1825ea") }
+d20002| 2024-05-26T08:54:26.877-0500 I  INDEX    [repl-writer-worker-0] index build: starting on config.transactions properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "config.transactions" } using method: Hybrid
+d20000| 2024-05-26T08:54:26.880-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56314 #23 (8 connections now open)
+d20002| 2024-05-26T08:54:26.877-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20000| 2024-05-26T08:54:26.893-0500 I  NETWORK  [conn23] received client metadata from 192.168.56.1:56314 conn23: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:26.900-0500 I  NETWORK  [conn23] end connection 192.168.56.1:56314 (7 connections now open)
+d20002| 2024-05-26T08:54:26.900-0500 I  INITSYNC [replication-1] CollectionCloner ns:config.transactions finished cloning with status: OK
+d20001| 2024-05-26T08:54:26.900-0500 I  INDEX    [repl-writer-worker-0] index build: starting on config.transactions properties: { v: 2, key: { _id: 1 }, name: "_id_", ns: "config.transactions" } using method: Hybrid
+d20000| 2024-05-26T08:54:26.901-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56315 #24 (8 connections now open)
+d20001| 2024-05-26T08:54:26.900-0500 I  INDEX    [repl-writer-worker-0] build may temporarily use up to 200 megabytes of RAM
+d20002| 2024-05-26T08:54:26.903-0500 I  INDEX    [replication-1] index build: inserted 0 keys from external sorter into index in 0 seconds
+d20000| 2024-05-26T08:54:26.903-0500 I  NETWORK  [conn24] received client metadata from 192.168.56.1:56315 conn24: { driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20002| 2024-05-26T08:54:26.904-0500 I  INDEX    [replication-1] index build: done building index _id_ on ns config.transactions
+d20000| 2024-05-26T08:54:26.908-0500 I  NETWORK  [conn24] end connection 192.168.56.1:56315 (7 connections now open)
+d20001| 2024-05-26T08:54:26.908-0500 I  INITSYNC [replication-0] CollectionCloner ns:config.transactions finished cloning with status: OK
+d20002| 2024-05-26T08:54:26.908-0500 I  INITSYNC [replication-1] Finished cloning data: OK. Beginning oplog replay.
+d20002| 2024-05-26T08:54:26.909-0500 I  INITSYNC [replication-0] No need to apply operations. (currently at { : Timestamp(1716731665, 9) })
+d20002| 2024-05-26T08:54:26.910-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "replset.minvalid" }
+d20002| 2024-05-26T08:54:26.910-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "replset.election" }
+d20002| 2024-05-26T08:54:26.910-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "system.rollback.id" }
+d20002| 2024-05-26T08:54:26.910-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "temp_oplog_buffer" }
+d20002| 2024-05-26T08:54:26.910-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "replset.oplogTruncateAfterPoint" }
+d20002| 2024-05-26T08:54:26.912-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "oplog.rs" }
+d20002| 2024-05-26T08:54:26.913-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "startup_log" }
+d20002| 2024-05-26T08:54:26.913-0500 I  COMMAND  [replication-1] CMD: collMod: { collMod: "system.replset" }
+d20002| 2024-05-26T08:54:26.913-0500 I  INITSYNC [replication-1] Finished fetching oplog during initial sync: CallbackCanceled: error in fetcher batch callback: oplog fetcher is shutting down. Last fetched optime: { ts: Timestamp(0, 0), t: -1 }
+d20002| 2024-05-26T08:54:26.913-0500 I  CONNPOOL [RS] Ending connection to host LAPTOP-K8JF3JJ2:20000 due to bad connection status: CallbackCanceled: Callback was canceled; 1 connections to that host remain open
+d20002| 2024-05-26T08:54:26.914-0500 I  INITSYNC [replication-1] Initial sync attempt finishing up.
+d20002| 2024-05-26T08:54:26.914-0500 I  INITSYNC [replication-1] Initial Sync Attempt Statistics: { failedInitialSyncAttempts: 0, maxFailedInitialSyncAttempts: 10, initialSyncStart: new Date(1716731665616), totalInitialSyncElapsedMillis: 1298, initialSyncAttempts: [], approxTotalDataSize: 229, approxTotalBytesCopied: 229, remainingInitialSyncEstimatedMillis: 0, fetchedMissingDocs: 0, appliedOps: 0, initialSyncOplogStart: Timestamp(1716731665, 9), initialSyncOplogEnd: Timestamp(1716731665, 9), databases: { databasesToClone: 0, databasesCloned: 2, admin: { collections: 2, clonedCollections: 2, start: new Date(1716731666686), end: new Date(1716731666772), elapsedMillis: 86, admin.system.version: { documentsToCopy: 1, documentsCopied: 1, indexes: 1, fetchedBatches: 1, bytesToCopy: 59, approxBytesCopied: 59, start: new Date(1716731666690), end: new Date(1716731666722), elapsedMillis: 32, receivedBatches: 1 }, admin.system.keys: { documentsToCopy: 2, documentsCopied: 2, indexes: 1, fetchedBatches: 1, bytesToCopy: 170, approxBytesCopied: 170, start: new Date(1716731666722), end: new Date(1716731666772), elapsedMillis: 50, receivedBatches: 1 } }, config: { collections: 2, clonedCollections: 2, start: new Date(1716731666772), end: new Date(1716731666908), elapsedMillis: 136, config.image_collection: { documentsToCopy: 0, documentsCopied: 0, indexes: 1, fetchedBatches: 0, bytesToCopy: 0, start: new Date(1716731666772), end: new Date(1716731666816), elapsedMillis: 44, receivedBatches: 0 }, config.transactions: { documentsToCopy: 0, documentsCopied: 0, indexes: 1, fetchedBatches: 0, bytesToCopy: 0, start: new Date(1716731666816), end: new Date(1716731666908), elapsedMillis: 92, receivedBatches: 0 } } } }
+d20002| 2024-05-26T08:54:26.914-0500 I  STORAGE  [replication-1] Finishing collection drop for local.temp_oplog_buffer (5900b122-0ab4-4973-b499-e98e4f9eb247).
+d20002| 2024-05-26T08:54:26.921-0500 I  INITSYNC [replication-1] initial sync done; took 1s.
+d20002| 2024-05-26T08:54:26.921-0500 I  REPL     [replication-1] transition to RECOVERING from STARTUP2
+d20002| 2024-05-26T08:54:26.921-0500 I  REPL     [replication-1] Starting replication fetcher thread
+d20002| 2024-05-26T08:54:26.922-0500 I  REPL     [replication-1] Starting replication applier thread
+d20002| 2024-05-26T08:54:26.922-0500 I  REPL     [replication-1] Starting replication reporter thread
+d20002| 2024-05-26T08:54:26.922-0500 I  REPL     [rsSync-0] Starting oplog application
+d20002| 2024-05-26T08:54:26.923-0500 I  REPL     [rsBackgroundSync] could not find member to sync from
+d20001| 2024-05-26T08:54:26.924-0500 I  INDEX    [replication-0] index build: inserted 0 keys from external sorter into index in 0 seconds
+d20002| 2024-05-26T08:54:26.925-0500 I  REPL     [rsSync-0] transition to SECONDARY from RECOVERING
+d20002| 2024-05-26T08:54:26.925-0500 I  REPL     [rsSync-0] Resetting sync source to empty, which was :27017
+d20001| 2024-05-26T08:54:26.926-0500 I  INDEX    [replication-0] index build: done building index _id_ on ns config.transactions
+d20001| 2024-05-26T08:54:26.931-0500 I  INITSYNC [replication-0] Finished cloning data: OK. Beginning oplog replay.
+d20001| 2024-05-26T08:54:26.933-0500 I  INITSYNC [replication-1] No need to apply operations. (currently at { : Timestamp(1716731665, 9) })
+d20001| 2024-05-26T08:54:26.934-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "system.replset" }
+d20001| 2024-05-26T08:54:26.934-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "startup_log" }
+d20001| 2024-05-26T08:54:26.934-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "system.rollback.id" }
+d20001| 2024-05-26T08:54:26.934-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "oplog.rs" }
+d20001| 2024-05-26T08:54:26.934-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "temp_oplog_buffer" }
+d20001| 2024-05-26T08:54:26.934-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "replset.oplogTruncateAfterPoint" }
+d20001| 2024-05-26T08:54:26.935-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "replset.minvalid" }
+d20001| 2024-05-26T08:54:26.935-0500 I  COMMAND  [replication-0] CMD: collMod: { collMod: "replset.election" }
+d20001| 2024-05-26T08:54:26.935-0500 I  INITSYNC [replication-1] Finished fetching oplog during initial sync: CallbackCanceled: error in fetcher batch callback: oplog fetcher is shutting down. Last fetched optime: { ts: Timestamp(0, 0), t: -1 }
+d20001| 2024-05-26T08:54:26.935-0500 I  CONNPOOL [RS] Ending connection to host LAPTOP-K8JF3JJ2:20000 due to bad connection status: CallbackCanceled: Callback was canceled; 1 connections to that host remain open
+d20001| 2024-05-26T08:54:26.935-0500 I  INITSYNC [replication-1] Initial sync attempt finishing up.
+d20001| 2024-05-26T08:54:26.935-0500 I  INITSYNC [replication-1] Initial Sync Attempt Statistics: { failedInitialSyncAttempts: 0, maxFailedInitialSyncAttempts: 10, initialSyncStart: new Date(1716731665617), totalInitialSyncElapsedMillis: 1318, initialSyncAttempts: [], approxTotalDataSize: 229, approxTotalBytesCopied: 229, remainingInitialSyncEstimatedMillis: 0, fetchedMissingDocs: 0, appliedOps: 0, initialSyncOplogStart: Timestamp(1716731665, 9), initialSyncOplogEnd: Timestamp(1716731665, 9), databases: { databasesToClone: 0, databasesCloned: 2, admin: { collections: 2, clonedCollections: 2, start: new Date(1716731666687), end: new Date(1716731666777), elapsedMillis: 90, admin.system.version: { documentsToCopy: 1, documentsCopied: 1, indexes: 1, fetchedBatches: 1, bytesToCopy: 59, approxBytesCopied: 59, start: new Date(1716731666690), end: new Date(1716731666722), elapsedMillis: 32, receivedBatches: 1 }, admin.system.keys: { documentsToCopy: 2, documentsCopied: 2, indexes: 1, fetchedBatches: 1, bytesToCopy: 170, approxBytesCopied: 170, start: new Date(1716731666722), end: new Date(1716731666777), elapsedMillis: 55, receivedBatches: 1 } }, config: { collections: 2, clonedCollections: 2, start: new Date(1716731666776), end: new Date(1716731666931), elapsedMillis: 155, config.image_collection: { documentsToCopy: 0, documentsCopied: 0, indexes: 1, fetchedBatches: 0, bytesToCopy: 0, start: new Date(1716731666778), end: new Date(1716731666828), elapsedMillis: 50, receivedBatches: 0 }, config.transactions: { documentsToCopy: 0, documentsCopied: 0, indexes: 1, fetchedBatches: 0, bytesToCopy: 0, start: new Date(1716731666828), end: new Date(1716731666931), elapsedMillis: 103, receivedBatches: 0 } } } }
+d20001| 2024-05-26T08:54:26.935-0500 I  STORAGE  [replication-0] Finishing collection drop for local.temp_oplog_buffer (61dc365b-2ecc-4778-abbd-636d6ad5d90a).
+d20001| 2024-05-26T08:54:26.941-0500 I  INITSYNC [replication-0] initial sync done; took 1s.
+d20001| 2024-05-26T08:54:26.941-0500 I  REPL     [replication-0] transition to RECOVERING from STARTUP2
+d20001| 2024-05-26T08:54:26.941-0500 I  REPL     [replication-0] Starting replication fetcher thread
+d20001| 2024-05-26T08:54:26.941-0500 I  REPL     [replication-0] Starting replication applier thread
+d20001| 2024-05-26T08:54:26.942-0500 I  REPL     [replication-0] Starting replication reporter thread
+d20001| 2024-05-26T08:54:26.942-0500 I  REPL     [rsSync-0] Starting oplog application
+d20001| 2024-05-26T08:54:26.942-0500 I  REPL     [rsBackgroundSync] could not find member to sync from
+d20001| 2024-05-26T08:54:26.943-0500 I  REPL     [replexec-1] Member LAPTOP-K8JF3JJ2:20002 is now in state SECONDARY
+d20001| 2024-05-26T08:54:26.952-0500 I  REPL     [rsSync-0] transition to SECONDARY from RECOVERING
+d20001| 2024-05-26T08:54:26.952-0500 I  REPL     [rsSync-0] Resetting sync source to empty, which was :27017
+AwaitNodesAgreeOnPrimary: Waiting for nodes to agree on any primary.
+AwaitNodesAgreeOnPrimary: Nodes agreed on primary LAPTOP-K8JF3JJ2:20000
+Waiting for keys to sign $clusterTime to be generated
+AwaitLastStableRecoveryTimestamp: Beginning for [
+        "LAPTOP-K8JF3JJ2:20000",
+        "LAPTOP-K8JF3JJ2:20001",
+        "LAPTOP-K8JF3JJ2:20002"
+]
+AwaitNodesAgreeOnPrimary: Waiting for nodes to agree on any primary.
+AwaitNodesAgreeOnPrimary: Nodes agreed on primary LAPTOP-K8JF3JJ2:20000
+AwaitLastStableRecoveryTimestamp: ensuring the commit point advances for [
+        "LAPTOP-K8JF3JJ2:20000",
+        "LAPTOP-K8JF3JJ2:20001",
+        "LAPTOP-K8JF3JJ2:20002"
+]
+d20000| 2024-05-26T08:54:26.998-0500 I  NETWORK  [conn11] end connection 192.168.56.1:56302 (6 connections now open)
+d20000| 2024-05-26T08:54:26.999-0500 I  NETWORK  [conn12] end connection 192.168.56.1:56303 (5 connections now open)
+d20002| 2024-05-26T08:54:27.425-0500 I  REPL     [replexec-0] Member LAPTOP-K8JF3JJ2:20001 is now in state SECONDARY
+d20000| 2024-05-26T08:54:27.552-0500 I  REPL     [replexec-2] Member LAPTOP-K8JF3JJ2:20001 is now in state SECONDARY
+d20000| 2024-05-26T08:54:27.557-0500 I  REPL     [replexec-1] Member LAPTOP-K8JF3JJ2:20002 is now in state SECONDARY
+d20002| 2024-05-26T08:54:27.923-0500 I  REPL     [rsBackgroundSync] sync source candidate: LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T08:54:27.925-0500 I  STORAGE  [replexec-3] Triggering the first stable checkpoint. Initial Data: Timestamp(1716731665, 9) PrevStable: Timestamp(0, 0) CurrStable: Timestamp(1716731665, 9)
+d20002| 2024-05-26T08:54:27.925-0500 I  REPL     [rsBackgroundSync] Changed sync source from empty to LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T08:54:27.925-0500 I  REPL     [rsBackgroundSync] scheduling fetcher to read remote oplog on LAPTOP-K8JF3JJ2:20000 starting at filter: { ts: { $gte: Timestamp(1716731665, 9) } }
+d20002| 2024-05-26T08:54:27.926-0500 I  CONNPOOL [RS] Connecting to LAPTOP-K8JF3JJ2:20000
+d20000| 2024-05-26T08:54:27.927-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56318 #25 (6 connections now open)
+d20000| 2024-05-26T08:54:27.935-0500 I  NETWORK  [conn25] received client metadata from 192.168.56.1:56318 conn25: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T08:54:27.937-0500 I  COMMAND  [conn1] command admin.$cmd appName: "MongoDB Shell" command: appendOplogNote { appendOplogNote: 1.0, data: { awaitLastStableRecoveryTimestamp: 1.0 }, writeConcern: { w: "majority", wtimeout: 600000.0 }, lsid: { id: UUID("6d6e8681-eb86-4f82-bcbf-a85a710e8e5f") }, $clusterTime: { clusterTime: Timestamp(1716731665, 9), signature: { hash: BinData(0, 0000000000000000000000000000000000000000), keyId: 0 } }, $readPreference: { mode: "secondaryPreferred" }, $db: "admin" } numYields:0 reslen:163 locks:{ ParallelBatchWriterMode: { acquireCount: { r: 1 } }, ReplicationStateTransition: { acquireCount: { w: 1 } }, Global: { acquireCount: { w: 1 } } } flowControl:{ acquireCount: 1, timeAcquiringMicros: 1 } storage:{} protocol:op_msg 940ms
+AwaitLastStableRecoveryTimestamp: Waiting for stable recovery timestamps for [
+        "LAPTOP-K8JF3JJ2:20000",
+        "LAPTOP-K8JF3JJ2:20001",
+        "LAPTOP-K8JF3JJ2:20002"
+]
+AwaitLastStableRecoveryTimestamp: LAPTOP-K8JF3JJ2:20001 does not have a stable recovery timestamp yet.
+d20001| 2024-05-26T08:54:27.947-0500 I  REPL     [rsBackgroundSync] sync source candidate: LAPTOP-K8JF3JJ2:20000
+d20001| 2024-05-26T08:54:27.947-0500 I  STORAGE  [replexec-3] Triggering the first stable checkpoint. Initial Data: Timestamp(1716731665, 9) PrevStable: Timestamp(0, 0) CurrStable: Timestamp(1716731665, 9)
+d20001| 2024-05-26T08:54:27.950-0500 I  REPL     [rsBackgroundSync] Changed sync source from empty to LAPTOP-K8JF3JJ2:20000
+d20000| 2024-05-26T08:54:27.953-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:56319 #26 (7 connections now open)
+d20001| 2024-05-26T08:54:27.950-0500 I  REPL     [rsBackgroundSync] scheduling fetcher to read remote oplog on LAPTOP-K8JF3JJ2:20000 starting at filter: { ts: { $gte: Timestamp(1716731665, 9) } }
+d20001| 2024-05-26T08:54:27.951-0500 I  CONNPOOL [RS] Connecting to LAPTOP-K8JF3JJ2:20000
+d20000| 2024-05-26T08:54:27.956-0500 I  NETWORK  [conn26] received client metadata from 192.168.56.1:56319 conn26: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+AwaitLastStableRecoveryTimestamp: A stable recovery timestamp has successfully established on [
+        "LAPTOP-K8JF3JJ2:20000",
+        "LAPTOP-K8JF3JJ2:20001",
+        "LAPTOP-K8JF3JJ2:20002"
+]
+
+
+[jsTest] ----
+[jsTest] ReplSetTest stepUp: Stepping up LAPTOP-K8JF3JJ2:20000
+[jsTest] ----
+
+
+ReplSetTest awaitReplication: starting: optime for primary, LAPTOP-K8JF3JJ2:20000, is { "ts" : Timestamp(1716731667, 1), "t" : NumberLong(1) }
+ReplSetTest awaitReplication: checking secondaries against latest primary optime { "ts" : Timestamp(1716731667, 1), "t" : NumberLong(1) }
+ReplSetTest awaitReplication: checking secondary #0: LAPTOP-K8JF3JJ2:20001
+ReplSetTest awaitReplication: secondary #0, LAPTOP-K8JF3JJ2:20001, is synced
+ReplSetTest awaitReplication: checking secondary #1: LAPTOP-K8JF3JJ2:20002
+ReplSetTest awaitReplication: secondary #1, LAPTOP-K8JF3JJ2:20002, is synced
+ReplSetTest awaitReplication: finished: all 2 secondaries synced at optime { "ts" : Timestamp(1716731667, 1), "t" : NumberLong(1) }
+d20000| 2024-05-26T08:54:28.158-0500 I  COMMAND  [conn1] Received replSetStepUp request
+d20000| 2024-05-26T08:54:28.158-0500 I  ELECTION [conn1] Not starting an election for a replSetStepUp request, since we are not electable due to: Not standing for election again; already primary
+AwaitNodesAgreeOnPrimary: Waiting for nodes to agree on any primary.
+AwaitNodesAgreeOnPrimary: Nodes agreed on primary LAPTOP-K8JF3JJ2:20000
+
+
+[jsTest] ----
+[jsTest] ReplSetTest stepUp: Finished stepping up LAPTOP-K8JF3JJ2:20000
+[jsTest] ----
+
+
+> d20000| 2024-05-26T09:04:27.159-0500 I  QUERY    [clientcursormon] Cursor id 4909499619879177208 timed out, idle since 2024-05-26T08:54:26.998-0500
+d20000| 2024-05-26T09:04:27.159-0500 I  QUERY    [clientcursormon] Cursor id 977570996146691502 timed out, idle since 2024-05-26T08:54:26.998-0500
+d20000| 2024-05-26T09:14:18.404-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56708 #27 (8 connections now open)
+d20000| 2024-05-26T09:14:18.405-0500 I  NETWORK  [conn27] received client metadata from 127.0.0.1:56708 conn27: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:14:18.405-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56707 #28 (9 connections now open)
+d20000| 2024-05-26T09:14:18.405-0500 I  NETWORK  [conn28] received client metadata from 127.0.0.1:56707 conn28: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:14:18.408-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56709 #29 (10 connections now open)
+d20000| 2024-05-26T09:14:18.409-0500 I  NETWORK  [conn29] received client metadata from 127.0.0.1:56709 conn29: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:14:18.422-0500 I  NETWORK  [conn29] end connection 127.0.0.1:56709 (9 connections now open)
+d20000| 2024-05-26T09:14:18.422-0500 I  NETWORK  [conn28] end connection 127.0.0.1:56707 (8 connections now open)
+d20000| 2024-05-26T09:14:18.422-0500 I  NETWORK  [conn27] end connection 127.0.0.1:56708 (7 connections now open)
+d20000| 2024-05-26T09:22:18.690-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56950 #30 (8 connections now open)
+d20000| 2024-05-26T09:22:18.710-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56951 #31 (9 connections now open)
+d20000| 2024-05-26T09:22:18.710-0500 I  NETWORK  [conn30] received client metadata from 127.0.0.1:56950 conn30: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:22:18.713-0500 I  NETWORK  [conn31] received client metadata from 127.0.0.1:56951 conn31: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:22:18.713-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56952 #32 (10 connections now open)
+d20000| 2024-05-26T09:22:18.726-0500 I  NETWORK  [conn32] received client metadata from 127.0.0.1:56952 conn32: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20001| 2024-05-26T09:24:22.287-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56972 #18 (4 connections now open)
+d20001| 2024-05-26T09:24:22.301-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56973 #19 (5 connections now open)
+d20001| 2024-05-26T09:24:22.301-0500 I  NETWORK  [conn18] received client metadata from 127.0.0.1:56972 conn18: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20001| 2024-05-26T09:24:22.306-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56974 #20 (6 connections now open)
+d20001| 2024-05-26T09:24:22.306-0500 I  NETWORK  [conn19] received client metadata from 127.0.0.1:56973 conn19: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20001| 2024-05-26T09:24:22.309-0500 I  NETWORK  [conn20] received client metadata from 127.0.0.1:56974 conn20: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20002| 2024-05-26T09:24:37.638-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56981 #19 (4 connections now open)
+d20002| 2024-05-26T09:24:37.641-0500 I  NETWORK  [conn19] received client metadata from 127.0.0.1:56981 conn19: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20002| 2024-05-26T09:24:37.641-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56980 #20 (5 connections now open)
+d20002| 2024-05-26T09:24:37.649-0500 I  NETWORK  [conn20] received client metadata from 127.0.0.1:56980 conn20: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20002| 2024-05-26T09:24:37.651-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56982 #21 (6 connections now open)
+d20002| 2024-05-26T09:24:37.653-0500 I  NETWORK  [conn21] received client metadata from 127.0.0.1:56982 conn21: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20002| 2024-05-26T09:24:41.679-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56986 #22 (7 connections now open)
+d20002| 2024-05-26T09:24:41.697-0500 I  NETWORK  [conn22] received client metadata from 127.0.0.1:56986 conn22: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20002| 2024-05-26T09:24:41.740-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:56987 #23 (8 connections now open)
+d20002| 2024-05-26T09:24:41.743-0500 I  NETWORK  [conn23] received client metadata from 127.0.0.1:56987 conn23: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:32:30.031-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57081 #33 (11 connections now open)
+d20000| 2024-05-26T09:32:30.031-0500 I  NETWORK  [conn33] received client metadata from 127.0.0.1:57081 conn33: { application: { name: "MongoDB Shell" }, driver: { name: "MongoDB Internal Client", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20000| 2024-05-26T09:39:18.790-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57124 #34 (12 connections now open)
+d20000| 2024-05-26T09:39:18.791-0500 I  NETWORK  [conn34] received client metadata from 127.0.0.1:57124 conn34: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:39:18.792-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57125 #35 (13 connections now open)
+d20000| 2024-05-26T09:39:18.793-0500 I  NETWORK  [conn35] received client metadata from 127.0.0.1:57125 conn35: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:39:18.794-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57126 #36 (14 connections now open)
+d20000| 2024-05-26T09:39:18.795-0500 I  NETWORK  [conn36] received client metadata from 127.0.0.1:57126 conn36: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:39:18.816-0500 I  STORAGE  [conn36] createCollection: torneoligabetplay.encuentrosdeportivos with generated UUID: 892f7d36-4dd9-460a-86ac-100d47b28a4a and options: {}
+d20000| 2024-05-26T09:39:18.831-0500 I  INDEX    [conn36] index build: done building index _id_ on ns torneoligabetplay.encuentrosdeportivos
+d20000| 2024-05-26T09:39:18.842-0500 I  STORAGE  [conn36] createCollection: torneoligabetplay.tablaposiciones with generated UUID: a720e95a-bdd3-4328-8b90-4d26cc076b6b and options: {}
+d20000| 2024-05-26T09:39:18.847-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57127 #37 (15 connections now open)
+d20000| 2024-05-26T09:39:18.853-0500 I  NETWORK  [conn37] received client metadata from 127.0.0.1:57127 conn37: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:39:18.867-0500 I  INDEX    [conn36] index build: done building index _id_ on ns torneoligabetplay.tablaposiciones
+d20002| 2024-05-26T09:39:18.879-0500 I  STORAGE  [repl-writer-worker-1] createCollection: torneoligabetplay.encuentrosdeportivos with provided UUID: 892f7d36-4dd9-460a-86ac-100d47b28a4a and options: { uuid: UUID("892f7d36-4dd9-460a-86ac-100d47b28a4a") }
+d20001| 2024-05-26T09:39:18.882-0500 I  STORAGE  [repl-writer-worker-1] createCollection: torneoligabetplay.encuentrosdeportivos with provided UUID: 892f7d36-4dd9-460a-86ac-100d47b28a4a and options: { uuid: UUID("892f7d36-4dd9-460a-86ac-100d47b28a4a") }
+d20000| 2024-05-26T09:39:18.876-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57128 #38 (16 connections now open)
+d20000| 2024-05-26T09:39:18.904-0500 I  NETWORK  [conn38] received client metadata from 127.0.0.1:57128 conn38: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20002| 2024-05-26T09:39:18.907-0500 I  INDEX    [repl-writer-worker-1] index build: done building index _id_ on ns torneoligabetplay.encuentrosdeportivos
+d20001| 2024-05-26T09:39:18.911-0500 I  INDEX    [repl-writer-worker-1] index build: done building index _id_ on ns torneoligabetplay.encuentrosdeportivos
+d20000| 2024-05-26T09:39:18.917-0500 I  STORAGE  [conn38] createCollection: torneoligabetplay.resultados with generated UUID: 0b1579d9-af65-4231-af39-ca4b889e0588 and options: {}
+d20002| 2024-05-26T09:39:18.917-0500 I  STORAGE  [repl-writer-worker-1] createCollection: torneoligabetplay.tablaposiciones with provided UUID: a720e95a-bdd3-4328-8b90-4d26cc076b6b and options: { uuid: UUID("a720e95a-bdd3-4328-8b90-4d26cc076b6b") }
+d20001| 2024-05-26T09:39:18.924-0500 I  STORAGE  [repl-writer-worker-1] createCollection: torneoligabetplay.tablaposiciones with provided UUID: a720e95a-bdd3-4328-8b90-4d26cc076b6b and options: { uuid: UUID("a720e95a-bdd3-4328-8b90-4d26cc076b6b") }
+d20002| 2024-05-26T09:39:18.936-0500 I  INDEX    [repl-writer-worker-1] index build: done building index _id_ on ns torneoligabetplay.tablaposiciones
+d20000| 2024-05-26T09:39:18.948-0500 I  INDEX    [conn38] index build: done building index _id_ on ns torneoligabetplay.resultados
+d20000| 2024-05-26T09:39:18.964-0500 I  STORAGE  [conn38] createCollection: torneoligabetplay.equipos with generated UUID: 1ede94af-68f3-45f5-8a59-a5dbf9a33ef9 and options: {}
+d20001| 2024-05-26T09:39:18.972-0500 I  INDEX    [repl-writer-worker-1] index build: done building index _id_ on ns torneoligabetplay.tablaposiciones
+d20002| 2024-05-26T09:39:18.982-0500 I  STORAGE  [repl-writer-worker-2] createCollection: torneoligabetplay.resultados with provided UUID: 0b1579d9-af65-4231-af39-ca4b889e0588 and options: { uuid: UUID("0b1579d9-af65-4231-af39-ca4b889e0588") }
+d20000| 2024-05-26T09:39:18.986-0500 I  INDEX    [conn38] index build: done building index _id_ on ns torneoligabetplay.equipos
+d20002| 2024-05-26T09:39:19.018-0500 I  INDEX    [repl-writer-worker-2] index build: done building index _id_ on ns torneoligabetplay.resultados
+d20000| 2024-05-26T09:39:19.020-0500 I  STORAGE  [conn38] createCollection: torneoligabetplay.grupotecnico with generated UUID: a5a29fc2-37c2-40f3-ad5c-ccaaca352f24 and options: {}
+d20002| 2024-05-26T09:39:19.026-0500 I  STORAGE  [repl-writer-worker-1] createCollection: torneoligabetplay.equipos with provided UUID: 1ede94af-68f3-45f5-8a59-a5dbf9a33ef9 and options: { uuid: UUID("1ede94af-68f3-45f5-8a59-a5dbf9a33ef9") }
+d20001| 2024-05-26T09:39:19.030-0500 I  STORAGE  [repl-writer-worker-1] createCollection: torneoligabetplay.resultados with provided UUID: 0b1579d9-af65-4231-af39-ca4b889e0588 and options: { uuid: UUID("0b1579d9-af65-4231-af39-ca4b889e0588") }
+d20002| 2024-05-26T09:39:19.042-0500 I  INDEX    [repl-writer-worker-1] index build: done building index _id_ on ns torneoligabetplay.equipos
+d20000| 2024-05-26T09:39:19.043-0500 I  INDEX    [conn38] index build: done building index _id_ on ns torneoligabetplay.grupotecnico
+d20002| 2024-05-26T09:39:19.057-0500 I  STORAGE  [repl-writer-worker-5] createCollection: torneoligabetplay.grupotecnico with provided UUID: a5a29fc2-37c2-40f3-ad5c-ccaaca352f24 and options: { uuid: UUID("a5a29fc2-37c2-40f3-ad5c-ccaaca352f24") }
+d20001| 2024-05-26T09:39:19.063-0500 I  INDEX    [repl-writer-worker-1] index build: done building index _id_ on ns torneoligabetplay.resultados
+d20001| 2024-05-26T09:39:19.066-0500 I  STORAGE  [repl-writer-worker-3] createCollection: torneoligabetplay.equipos with provided UUID: 1ede94af-68f3-45f5-8a59-a5dbf9a33ef9 and options: { uuid: UUID("1ede94af-68f3-45f5-8a59-a5dbf9a33ef9") }
+d20002| 2024-05-26T09:39:19.074-0500 I  INDEX    [repl-writer-worker-5] index build: done building index _id_ on ns torneoligabetplay.grupotecnico
+d20001| 2024-05-26T09:39:19.084-0500 I  INDEX    [repl-writer-worker-3] index build: done building index _id_ on ns torneoligabetplay.equipos
+d20001| 2024-05-26T09:39:19.089-0500 I  STORAGE  [repl-writer-worker-4] createCollection: torneoligabetplay.grupotecnico with provided UUID: a5a29fc2-37c2-40f3-ad5c-ccaaca352f24 and options: { uuid: UUID("a5a29fc2-37c2-40f3-ad5c-ccaaca352f24") }
+d20001| 2024-05-26T09:39:19.104-0500 I  INDEX    [repl-writer-worker-4] index build: done building index _id_ on ns torneoligabetplay.grupotecnico
+d20000| 2024-05-26T09:39:19.229-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57129 #39 (17 connections now open)
+d20000| 2024-05-26T09:39:19.232-0500 I  NETWORK  [conn39] received client metadata from 127.0.0.1:57129 conn39: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:39:19.265-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57130 #40 (18 connections now open)
+d20000| 2024-05-26T09:39:19.266-0500 I  NETWORK  [conn40] received client metadata from 127.0.0.1:57130 conn40: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T09:39:24.062-0500 I  NETWORK  [conn37] end connection 127.0.0.1:57127 (17 connections now open)
+d20000| 2024-05-26T09:39:24.062-0500 I  NETWORK  [conn36] end connection 127.0.0.1:57126 (16 connections now open)
+d20000| 2024-05-26T09:39:24.063-0500 I  NETWORK  [conn38] end connection 127.0.0.1:57128 (15 connections now open)
+d20000| 2024-05-26T09:39:24.064-0500 I  NETWORK  [conn35] end connection 127.0.0.1:57125 (13 connections now open)
+d20000| 2024-05-26T09:39:24.063-0500 I  NETWORK  [conn34] end connection 127.0.0.1:57124 (14 connections now open)
+d20001| 2024-05-26T09:43:34.082-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57217 #21 (7 connections now open)
+d20001| 2024-05-26T09:43:34.085-0500 I  NETWORK  [conn21] received client metadata from 127.0.0.1:57217 conn21: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20001| 2024-05-26T09:43:34.143-0500 I  NETWORK  [listener] connection accepted from 127.0.0.1:57218 #22 (8 connections now open)
+d20001| 2024-05-26T09:43:34.144-0500 I  NETWORK  [conn22] received client metadata from 127.0.0.1:57218 conn22: { driver: { name: "mongo-java-driver|sync", version: "4.7.2-s3t" }, os: { type: "Windows", name: "Windows 10", architecture: "amd64", version: "10.0" }, platform: "Java/Eclipse Adoptium/17.0.9+9", application: { name: "Studio 3T" } }
+d20000| 2024-05-26T10:15:25.014-0500 I  REPL     [RstlKillOpThread] Starting to kill user operations
+d20000| 2024-05-26T10:15:25.014-0500 I  REPL     [RstlKillOpThread] Stopped killing user operations
+d20001| 2024-05-26T10:15:25.015-0500 I  COMMAND  [conn3] Received replSetStepUp request
+d20000| 2024-05-26T10:15:25.014-0500 I  REPL     [RstlKillOpThread] State transition ops metrics: { lastStateTransition: "stepDown", userOpsKilled: 0, userOpsRunning: 2 }
+d20000| 2024-05-26T10:15:25.015-0500 I  REPL     [conn33] transition to SECONDARY from PRIMARY
+d20001| 2024-05-26T10:15:25.015-0500 I  ELECTION [conn3] Starting an election due to step up request
+d20000| 2024-05-26T10:15:25.015-0500 I  REPL     [conn33] Handing off election to LAPTOP-K8JF3JJ2:20001
+d20001| 2024-05-26T10:15:25.015-0500 I  ELECTION [conn3] skipping dry run and running for election in term 2
+d20000| 2024-05-26T10:15:25.015-0500 I  COMMAND  [conn33] terminating, shutdown command received { shutdown: 1.0, lsid: { id: UUID("97d6bc9c-6aec-4310-8956-2f981d3c89a0") }, $clusterTime: { clusterTime: Timestamp(1716734359, 6), signature: { hash: BinData(0, 0000000000000000000000000000000000000000), keyId: 0 } }, $db: "admin" }
+d20001| 2024-05-26T10:15:25.017-0500 I  REPL     [replexec-44] Member LAPTOP-K8JF3JJ2:20000 is now in state SECONDARY
+d20000| 2024-05-26T10:15:25.015-0500 I  SHARDING [conn33] Shutting down the WaitForMajorityService
+d20000| 2024-05-26T10:15:25.017-0500 I  ELECTION [conn7] Received vote request: { replSetRequestVotes: 1, setName: "SerReplicaSet", dryRun: false, term: 2, candidateIndex: 1, configVersion: 2, lastCommittedOp: { ts: Timestamp(1716734359, 6), t: 1 } }
+d20000| 2024-05-26T10:15:25.017-0500 I  ELECTION [conn7] Sending vote response: { term: 2, voteGranted: true, reason: "" }
+d20002| 2024-05-26T10:15:25.018-0500 I  ELECTION [conn9] Received vote request: { replSetRequestVotes: 1, setName: "SerReplicaSet", dryRun: false, term: 2, candidateIndex: 1, configVersion: 2, lastCommittedOp: { ts: Timestamp(1716734359, 6), t: 1 } }
+d20001| 2024-05-26T10:15:25.017-0500 I  REPL     [replexec-43] Scheduling remote command request for vote request: RemoteCommand 6878 -- target:LAPTOP-K8JF3JJ2:20000 db:admin cmd:{ replSetRequestVotes: 1, setName: "SerReplicaSet", dryRun: false, term: 2, candidateIndex: 1, configVersion: 2, lastCommittedOp: { ts: Timestamp(1716734359, 6), t: 1 } }
+d20002| 2024-05-26T10:15:25.018-0500 I  ELECTION [conn9] Sending vote response: { term: 2, voteGranted: true, reason: "" }
+d20001| 2024-05-26T10:15:25.017-0500 I  REPL     [replexec-43] Scheduling remote command request for vote request: RemoteCommand 6879 -- target:LAPTOP-K8JF3JJ2:20002 db:admin cmd:{ replSetRequestVotes: 1, setName: "SerReplicaSet", dryRun: false, term: 2, candidateIndex: 1, configVersion: 2, lastCommittedOp: { ts: Timestamp(1716734359, 6), t: 1 } }
+d20001| 2024-05-26T10:15:25.020-0500 I  ELECTION [replexec-45] VoteRequester(term 2) received a yes vote from LAPTOP-K8JF3JJ2:20000; response message: { term: 2, voteGranted: true, reason: "", ok: 1.0, $clusterTime: { clusterTime: Timestamp(1716734359, 6), signature: { hash: BinData(0, 0000000000000000000000000000000000000000), keyId: 0 } }, operationTime: Timestamp(1716734359, 6) }
+d20000| 2024-05-26T10:15:25.020-0500 I  CONTROL  [conn33] Shutting down the LogicalSessionCache
+d20000| 2024-05-26T10:15:25.020-0500 I  NETWORK  [conn33] shutdown: going to close listening sockets...
+d20001| 2024-05-26T10:15:25.020-0500 I  ELECTION [replexec-43] election succeeded, assuming primary role in term 2
+d20001| 2024-05-26T10:15:25.020-0500 I  REPL     [replexec-43] transition to PRIMARY from SECONDARY
+d20000| 2024-05-26T10:15:25.021-0500 I  NETWORK  [conn33] Shutting down the global connection pool
+d20001| 2024-05-26T10:15:25.020-0500 I  REPL     [replexec-43] Resetting sync source to empty, which was LAPTOP-K8JF3JJ2:20000
+d20000| 2024-05-26T10:15:25.021-0500 I  STORAGE  [conn33] Shutting down the FlowControlTicketholder
+d20000| 2024-05-26T10:15:25.021-0500 I  -        [conn33] Stopping further Flow Control ticket acquisitions.
+d20000| 2024-05-26T10:15:25.021-0500 I  STORAGE  [conn33] Shutting down the PeriodicThreadToAbortExpiredTransactions
+d20000| 2024-05-26T10:15:25.021-0500 I  STORAGE  [conn33] Shutting down the PeriodicThreadToDecreaseSnapshotHistoryIfNotNeeded
+d20001| 2024-05-26T10:15:25.022-0500 I  REPL     [replexec-43] Entering primary catch-up mode.
+d20000| 2024-05-26T10:15:25.021-0500 I  REPL     [conn33] Shutting down the ReplicationCoordinator
+d20000| 2024-05-26T10:15:25.021-0500 I  REPL     [conn33] shutting down replication subsystems
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [replexec-43] Caught up to the latest optime known via heartbeats after becoming primary. Target optime: { ts: Timestamp(1716734359, 6), t: 1 }. My Last Applied: { ts: Timestamp(1716734359, 6), t: 1 }
+d20000| 2024-05-26T10:15:25.021-0500 I  REPL     [conn33] Stopping replication reporter thread
+d20000| 2024-05-26T10:15:25.021-0500 I  REPL     [conn33] Stopping replication fetcher thread
+d20000| 2024-05-26T10:15:25.021-0500 I  REPL     [conn33] Stopping replication applier thread
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [replexec-43] Exited primary catch-up mode.
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [replexec-43] Stopping replication producer
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [ReplBatcher] Oplog buffer has been drained in term 2
+d20001| 2024-05-26T10:15:25.023-0500 I  CONNPOOL [RS] Ending connection to host LAPTOP-K8JF3JJ2:20000 due to bad connection status: CallbackCanceled: Callback was canceled; 1 connections to that host remain open
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [rsBackgroundSync] Replication producer stopped after oplog fetcher finished returning a batch from our sync source.  Abandoning this batch of oplog entries and re-evaluating our sync source.
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [ReplBatcher] Oplog buffer has been drained in term 2
+d20001| 2024-05-26T10:15:25.023-0500 I  REPL     [RstlKillOpThread] Starting to kill user operations
+d20001| 2024-05-26T10:15:25.024-0500 I  REPL     [RstlKillOpThread] Stopped killing user operations
+d20001| 2024-05-26T10:15:25.024-0500 I  REPL     [RstlKillOpThread] State transition ops metrics: { lastStateTransition: "stepUp", userOpsKilled: 0, userOpsRunning: 0 }
+d20001| 2024-05-26T10:15:25.024-0500 I  REPL     [rsSync-0] transition to primary complete; database writes are now permitted
+d20000| 2024-05-26T10:15:25.050-0500 I  REPL     [rsSync-0] Finished oplog application
+d20000| 2024-05-26T10:15:26.016-0500 I  REPL     [rsBackgroundSync] Stopping replication producer
+d20000| 2024-05-26T10:15:26.016-0500 I  REPL     [conn33] Stopping replication storage threads
+d20000| 2024-05-26T10:15:26.026-0500 I  ASIO     [RS] Killing all outstanding egress activity.
+d20000| 2024-05-26T10:15:26.031-0500 I  ASIO     [RS] Killing all outstanding egress activity.
+d20000| 2024-05-26T10:15:26.037-0500 I  ASIO     [Replication] Killing all outstanding egress activity.
+d20000| 2024-05-26T10:15:26.038-0500 I  CONNPOOL [Replication] Dropping all pooled connections to LAPTOP-K8JF3JJ2:20001 due to ShutdownInProgress: Shutting down the connection pool
+d20000| 2024-05-26T10:15:26.038-0500 I  CONNPOOL [Replication] Dropping all pooled connections to LAPTOP-K8JF3JJ2:20002 due to ShutdownInProgress: Shutting down the connection pool
+d20001| 2024-05-26T10:15:26.038-0500 I  NETWORK  [conn3] end connection 192.168.56.1:56291 (7 connections now open)
+d20002| 2024-05-26T10:15:26.039-0500 I  NETWORK  [conn4] end connection 192.168.56.1:56293 (7 connections now open)
+d20000| 2024-05-26T10:15:26.040-0500 I  SHARDING [conn33] Shutting down the ShardingInitializationMongoD
+d20000| 2024-05-26T10:15:26.041-0500 I  REPL     [conn33] Enqueuing the ReplicationStateTransitionLock for shutdown
+d20000| 2024-05-26T10:15:26.041-0500 I  -        [conn33] Killing all operations for shutdown
+d20000| 2024-05-26T10:15:26.041-0500 I  COMMAND  [conn33] Shutting down all open transactions
+d20000| 2024-05-26T10:15:26.041-0500 I  REPL     [conn33] Acquiring the ReplicationStateTransitionLock for shutdown
+d20000| 2024-05-26T10:15:26.041-0500 I  INDEX    [conn33] Shutting down the IndexBuildsCoordinator
+d20000| 2024-05-26T10:15:26.041-0500 I  NETWORK  [conn33] Shutting down the ReplicaSetMonitor
+d20000| 2024-05-26T10:15:26.042-0500 I  REPL     [conn33] Shutting down the LogicalTimeValidator
+d20000| 2024-05-26T10:15:26.043-0500 I  CONTROL  [conn33] Shutting down free monitoring
+d20000| 2024-05-26T10:15:26.043-0500 I  CONTROL  [conn33] Shutting down free monitoring
+d20000| 2024-05-26T10:15:26.043-0500 I  FTDC     [conn33] Shutting down full-time data capture
+d20000| 2024-05-26T10:15:26.043-0500 I  FTDC     [conn33] Shutting down full-time diagnostic data capture
+d20000| 2024-05-26T10:15:26.048-0500 I  STORAGE  [conn33] Shutting down the HealthLog
+d20000| 2024-05-26T10:15:26.048-0500 I  STORAGE  [conn33] Shutting down the storage engine
+d20000| 2024-05-26T10:15:26.048-0500 I  STORAGE  [conn33] Deregistering all the collections
+d20000| 2024-05-26T10:15:26.049-0500 I  STORAGE  [WTOplogJournalThread] Oplog journal thread loop shutting down
+d20000| 2024-05-26T10:15:26.050-0500 I  STORAGE  [conn33] Timestamp monitor shutting down
+d20000| 2024-05-26T10:15:26.051-0500 I  STORAGE  [conn33] WiredTigerKVEngine shutting down
+d20000| 2024-05-26T10:15:26.051-0500 I  STORAGE  [conn33] Shutting down session sweeper thread
+d20000| 2024-05-26T10:15:26.051-0500 I  STORAGE  [conn33] Finished shutting down session sweeper thread
+d20000| 2024-05-26T10:15:26.051-0500 I  STORAGE  [conn33] Shutting down journal flusher thread
+d20000| 2024-05-26T10:15:26.053-0500 W  QUERY    [conn15] GetMore command executor error: FAILURE, status: InterruptedAtShutdown: interrupted at shutdown, stats: { stage: "COLLSCAN", nReturned: 48, executionTimeMillisEstimate: 15, works: 6072, advanced: 48, needTime: 3012, needYield: 0, saveState: 3012, restoreState: 3011, isEOF: 0, direction: "forward", docsExamined: 48 }
+d20000| 2024-05-26T10:15:26.053-0500 W  QUERY    [conn16] GetMore command executor error: FAILURE, status: InterruptedAtShutdown: interrupted at shutdown, stats: { stage: "COLLSCAN", nReturned: 48, executionTimeMillisEstimate: 10, works: 6058, advanced: 48, needTime: 3005, needYield: 0, saveState: 3005, restoreState: 3004, isEOF: 0, direction: "forward", docsExamined: 48 }
+d20002| 2024-05-26T10:15:26.056-0500 I  REPL     [replication-3] Restarting oplog query due to error: InterruptedAtShutdown: error in fetcher batch callback :: caused by :: interrupted at shutdown. Last fetched optime: { ts: Timestamp(1716734359, 6), t: 1 }. Restarts remaining: 1
+d20000| 2024-05-26T10:15:26.057-0500 I  NETWORK  [conn16] end connection 192.168.56.1:56307 (12 connections now open)
+d20002| 2024-05-26T10:15:26.057-0500 I  REPL     [replication-3] Scheduled new oplog query Fetcher source: LAPTOP-K8JF3JJ2:20000 database: local query: { find: "oplog.rs", filter: { ts: { $gte: Timestamp(1716734359, 6) } }, tailable: true, oplogReplay: true, awaitData: true, maxTimeMS: 2000, batchSize: 13981010, term: 2, readConcern: { afterClusterTime: Timestamp(0, 1) } } query metadata: { $replData: 1, $oplogQueryData: 1, $readPreference: { mode: "secondaryPreferred" } } active: 1 findNetworkTimeout: 7000ms getMoreNetworkTimeout: 10000ms shutting down?: 0 first: 1 firstCommandScheduler: RemoteCommandRetryScheduler request: RemoteCommand 6887 -- target:LAPTOP-K8JF3JJ2:20000 db:local cmd:{ find: "oplog.rs", filter: { ts: { $gte: Timestamp(1716734359, 6) } }, tailable: true, oplogReplay: true, awaitData: true, maxTimeMS: 2000, batchSize: 13981010, term: 2, readConcern: { afterClusterTime: Timestamp(0, 1) } } active: 1 callbackHandle.valid: 1 callbackHandle.cancelled: 0 attempt: 1 retryPolicy: {type: "NoRetryPolicy"}
+d20002| 2024-05-26T10:15:26.057-0500 I  REPL     [replication-3] Error returned from oplog query (no more query restarts left): InterruptedAtShutdown: error in fetcher batch callback :: caused by :: interrupted at shutdown
+d20002| 2024-05-26T10:15:26.058-0500 W  REPL     [rsBackgroundSync] Fetcher stopped querying remote oplog with error: InterruptedAtShutdown: error in fetcher batch callback :: caused by :: interrupted at shutdown
+d20002| 2024-05-26T10:15:26.058-0500 I  REPL     [rsBackgroundSync] Clearing sync source LAPTOP-K8JF3JJ2:20000 to choose a new one.
+d20002| 2024-05-26T10:15:26.058-0500 I  REPL     [rsBackgroundSync] could not find member to sync from
+d20002| 2024-05-26T10:15:26.062-0500 I  REPL     [replexec-21] Member LAPTOP-K8JF3JJ2:20001 is now in state PRIMARY
+d20002| 2024-05-26T10:15:26.063-0500 I  REPL_HB  [replexec-22] Heartbeat to LAPTOP-K8JF3JJ2:20000 failed after 2 retries, response status: InterruptedAtShutdown: interrupted at shutdown
+d20000| 2024-05-26T10:15:26.063-0500 I  STORAGE  [conn33] Finished shutting down journal flusher thread
+d20002| 2024-05-26T10:15:26.063-0500 I  REPL     [replexec-22] Member LAPTOP-K8JF3JJ2:20000 is now in state RS_DOWN - interrupted at shutdown
+d20000| 2024-05-26T10:15:26.063-0500 I  STORAGE  [conn33] Shutting down checkpoint thread
+d20000| 2024-05-26T10:15:26.064-0500 I  STORAGE  [conn33] Finished shutting down checkpoint thread
+d20000| 2024-05-26T10:15:26.101-0500 I  STORAGE  [conn33] shutdown: removing fs lock...
+d20000| 2024-05-26T10:15:26.102-0500 I  -        [conn33] Dropping the scope cache for shutdown
+d20000| 2024-05-26T10:15:26.102-0500 I  CONTROL  [conn33] now exiting
+d20000| 2024-05-26T10:15:26.103-0500 I  CONTROL  [conn33] shutting down with code:0
+d20002| 2024-05-26T10:15:26.563-0500 W  NETWORK  [replexec-21] Failed to check socket connectivity: La operaci├│n se complet├│ correctamente.
+d20002| 2024-05-26T10:15:26.563-0500 I  CONNPOOL [replexec-21] dropping unhealthy pooled connection to LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T10:15:26.564-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20001| 2024-05-26T10:15:27.024-0500 W  NETWORK  [replexec-44] Failed to check socket connectivity: La operaci├│n se complet├│ correctamente.
+d20001| 2024-05-26T10:15:27.024-0500 I  CONNPOOL [replexec-44] dropping unhealthy pooled connection to LAPTOP-K8JF3JJ2:20000
+d20001| 2024-05-26T10:15:27.025-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T10:15:27.061-0500 I  REPL     [rsBackgroundSync] sync source candidate: LAPTOP-K8JF3JJ2:20001
+d20002| 2024-05-26T10:15:27.062-0500 I  CONNPOOL [RS] Connecting to LAPTOP-K8JF3JJ2:20001
+d20001| 2024-05-26T10:15:27.063-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:57561 #23 (8 connections now open)
+d20001| 2024-05-26T10:15:27.064-0500 I  NETWORK  [conn23] received client metadata from 192.168.56.1:57561 conn23: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20002| 2024-05-26T10:15:27.066-0500 I  REPL     [rsBackgroundSync] Changed sync source from empty to LAPTOP-K8JF3JJ2:20001
+d20002| 2024-05-26T10:15:27.066-0500 I  REPL     [SyncSourceFeedback] SyncSourceFeedback error sending update to LAPTOP-K8JF3JJ2:20000: InvalidSyncSource: Sync source changed from LAPTOP-K8JF3JJ2:20000 to LAPTOP-K8JF3JJ2:20001
+d20002| 2024-05-26T10:15:27.066-0500 I  REPL     [rsBackgroundSync] scheduling fetcher to read remote oplog on LAPTOP-K8JF3JJ2:20001 starting at filter: { ts: { $gte: Timestamp(1716734359, 6) } }
+d20001| 2024-05-26T10:15:27.069-0500 I  NETWORK  [listener] connection accepted from 192.168.56.1:57562 #24 (9 connections now open)
+d20001| 2024-05-26T10:15:27.070-0500 I  NETWORK  [conn24] received client metadata from 192.168.56.1:57562 conn24: { driver: { name: "NetworkInterfaceTL", version: "4.2.25" }, os: { type: "Windows", name: "Microsoft Windows 10", architecture: "x86_64", version: "10.0 (build 19045)" } }
+d20002| 2024-05-26T10:15:28.599-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20001| 2024-05-26T10:15:29.065-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20001| 2024-05-26T10:15:29.640-0500 I  REPL     [SyncSourceFeedback] SyncSourceFeedback error sending update to LAPTOP-K8JF3JJ2:20000: InvalidSyncSource: Sync source was cleared. Was LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T10:15:30.640-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20001| 2024-05-26T10:15:31.107-0500 I  CONNPOOL [Replication] Connecting to LAPTOP-K8JF3JJ2:20000
+d20002| 2024-05-26T10:15:32.680-0500 I  REPL_HB  [replexec-22] Heartbeat to LAPTOP-K8JF3JJ2:20000 failed after 2 retries, response status: HostUnreachable: Error connecting to LAPTOP-K8JF3JJ2:20000 (192.168.56.1:20000) :: caused by :: No se puede establecer una conexi¾n ya que el equipo de destino deneg¾ expresamente dicha conexi¾n.
+d20001| 2024-05-26T10:15:33.140-0500 I  REPL_HB  [replexec-47] Heartbeat to LAPTOP-K8JF3JJ2:20000 failed after 2 retries, response status: HostUnreachable: Error connecting to LAPTOP-K8JF3JJ2:20000 (192.168.56.1:20000) :: caused by :: No se puede establecer una conexi¾n ya que el equipo de destino deneg¾ expresamente dicha conexi¾n.
+d20001| 2024-05-26T10:15:33.141-0500 I  REPL     [replexec-47] Member LAPTOP-K8JF3JJ2:20000 is now in state RS_DOWN - Error connecting to LAPTOP-K8JF3JJ2:20000 (192.168.56.1:20000) :: caused by :: No se puede establecer una conexi¾n ya que el equipo de destino deneg¾ expresamente dicha conexi¾n.
