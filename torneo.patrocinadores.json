@@ -1,0 +1,35 @@
+[{
+  "_id": {
+    "$oid": "66536f3fa66c846f7ce50bfa"
+  },
+  "nombre": "Pastas Doria",
+  "descripcion": "patrocinador secundario"
+},
+{
+  "_id": {
+    "$oid": "665370b8a66c846f7ce50c01"
+  },
+  "nombre": "Bet Play",
+  "descripcion": "patrocinador principal de la liga"
+},
+{
+  "_id": {
+    "$oid": "665370d8a66c846f7ce50c02"
+  },
+  "nombre": "Nissan",
+  "descripcion": "patrocinador secundario"
+},
+{
+  "_id": {
+    "$oid": "6653710ca66c846f7ce50c03"
+  },
+  "nombre": "Burguer King",
+  "descripcion": "patrocinador secundario"
+},
+{
+  "_id": {
+    "$oid": "6653711da66c846f7ce50c04"
+  },
+  "nombre": "Allianz",
+  "descripcion": "patrocinador secundario"
+}]
