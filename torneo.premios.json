@@ -1,0 +1,34 @@
+[
+    {
+        "_id": {
+            "$oid": "665382343c29175616f009f8"
+        },
+        "NombrePremio": "Premio al Jugador Más Valioso",
+        "Descripcion": "Reconocimiento otorgado al jugador que haya tenido el mejor desempeño durante todo el torneo.",
+        "CriterioSeleccion": "El jugador que haya acumulado la mayor cantidad de puntos según la evaluación de los árbitros en cada partido."
+    },
+    {
+        "_id": {
+            "$oid": "665382bd3c29175616f009f9"
+        },
+        "NombrePremio": "Botín de Oro",
+        "Descripcion": "Reconocimiento otorgado al máximo goleador del torneo.",
+        "CriterioSeleccion": "El jugador que haya anotado la mayor cantidad de goles durante todo el torneo."
+    },
+    {
+        "_id": {
+            "$oid": "665383503c29175616f009fa"
+        },
+        "NombrePremio": "Guante de Oro",
+        "Descripcion": "Reconocimiento otorgado al mejor portero del torneo.",
+        "CriterioSeleccion": "El portero que haya mantenido su portería imbatida durante más tiempo y haya realizado las mejores atajadas."
+    },
+    {
+        "_id": {
+            "$oid": "665383673c29175616f009fb"
+        },
+        "NombrePremio": "Premio Fair Play",
+        "Descripcion": "Reconocimiento otorgado al equipo con el mejor comportamiento deportivo y fair play durante el torneo.",
+        "CriterioSeleccion": "El equipo que haya mostrado el mejor comportamiento deportivo, evitando faltas y conductas antideportivas."
+    }
+]

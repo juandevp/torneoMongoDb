@@ -1,0 +1,87 @@
+[
+    {
+        "_id": {
+            "$oid": "66538d263c29175616f00a06"
+        },
+        "EncuentroDeportivo": {
+            "$oid": "663fb7a8de11ea4305e67312"
+        },
+        "Premio": {
+            "$oid": "665382343c29175616f009f8"
+        },
+        "Jugador": {
+            "NombreJugador": "Bacca",
+            "EquipoJugador": {
+                "$oid": "663fac8ade11ea4305e672d9"
+            }
+        }
+    },
+    {
+        "_id": {
+            "$oid": "66538d433c29175616f00a07"
+        },
+        "EncuentroDeportivo": {
+            "$oid": "663fb99ede11ea4305e67317"
+        },
+        "Premio": {
+            "$oid": "665382343c29175616f009f8"
+        },
+        "Jugador": {
+            "NombreJugador": "Daniel Giraldo",
+            "EquipoJugador": {
+                "$oid": "663fac8ade11ea4305e672d9"
+            }
+        }
+    },
+    {
+        "_id": {
+            "$oid": "66538d8f3c29175616f00a08"
+        },
+        "EncuentroDeportivo": {
+            "$oid": "663fba63de11ea4305e67320"
+        },
+        "Premio": {
+            "$oid": "665382343c29175616f009f8"
+        },
+        "Jugador": {
+            "NombreJugador": "Leonardo Castro",
+            "EquipoJugador": {
+                "$oid": "663faf21de11ea4305e672ed"
+            }
+        }
+    },
+    {
+        "_id": {
+            "$oid": "66538dd43c29175616f00a09"
+        },
+        "EncuentroDeportivo": {
+            "$oid": "663fbb07de11ea4305e67324"
+        },
+        "Premio": {
+            "$oid": "665382343c29175616f009f8"
+        },
+        "Jugador": {
+            "NombreJugador": "David Silva",
+            "EquipoJugador": {
+                "$oid": "663fb1fbde11ea4305e672f3"
+            }
+        }
+    },
+    {
+        "_id": {
+            "$oid": "66538e053c29175616f00a0a"
+        },
+        "EncuentroDeportivo": {
+            "$oid": "663fbd1ede11ea4305e6732b"
+        },
+        "Premio": {
+            "$oid": "665382343c29175616f009f8"
+        },
+        "Jugador": {
+            "NombreJugador": "Wilson Morelo",
+            "EquipoJugador": {
+                "$oid": "663fbc61de11ea4305e67328"
+            }
+        }
+    }
+]
