@@ -7,7 +7,7 @@
     "Nombre": "Arturo Reyes Montero",
     "Pais": "Colombia",
     "Edad": "55",
-    "Experiencia": "ExFutbolista",
+    
     "EquiposAnteriores": [
       {
         "Equipo": "Selección Colombia",
@@ -31,7 +31,7 @@
     "Nombre": "Leonel Álvarez",
     "Pais": "Colombia",
     "Edad": "58",
-    "Experiencia": "ExFutbolista",
+    
     "EquiposAnteriores": [
       {
         "Equipo": "Independiente Medellín",
@@ -87,7 +87,7 @@
     "Nombre": "Alberto Gamero",
     "Pais": "Colombia",
     "Edad": "60",
-    "Experiencia": "ExFutbolista",
+    
     "EquiposAnteriores": [
       {
         "Equipo": "Chía Fair Play",
@@ -135,7 +135,7 @@
     "Nombre": "Rafael Dudamel",
     "Pais": "Venezuela",
     "Edad": "60",
-    "Experiencia": "ExFutbolista",
+    
     "EquiposAnteriores": [
       {
         "Equipo": "Estudiantes de Mérida",
@@ -187,7 +187,7 @@
     "Nombre": "Pablo Peirano",
     "Pais": "Uruguay",
     "Edad": "49",
-    "Experiencia": "ExFutbolista",
+    
     "EquiposAnteriores": [
       {
         "Equipo": "Racing Club de Montevideo",
