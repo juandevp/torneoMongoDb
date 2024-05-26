@@ -9,8 +9,14 @@
     "Edad": "55",
     "Experiencia": "ExFutbolista",
     "EquiposAnteriores": [
-      "Atlético Bucaramanga",
-      "Selección Colombia"
+      {
+        "Equipo": "Selección Colombia",
+        "AñosPermanencia": "2018-03-21"    
+      },
+      {
+        "Equipo": "Atlético Bucaramanga",
+        "AñosPermanencia": "2006-03-21"    
+      }     
     ]
   },
   "Propietario": "Fuad Char",
@@ -27,16 +33,46 @@
     "Edad": "58",
     "Experiencia": "ExFutbolista",
     "EquiposAnteriores": [
-      "Independiente Medellín",
-      "Selección Colombia",
-      "Itagüí Fútbol Club S.A.",
-      "Deportivo Cali",
-      "Independiente Medellín",
-      "Club Cerro Porteño",
-      "Club Libertad",
-      "Águilas Doradas Rionegro",
-      "Club Cienciano",
-      "Deportivo Pereira"
+      {
+        "Equipo": "Independiente Medellín",
+        "AñosPermanencia":"2010"    
+      },
+      {
+        "Equipo":  "Selección Colombia",
+        "AñosPermanencia":"2011"    
+      },
+      {
+        "Equipo": "Itagüí Fútbol Club S.A.",
+        "AñosPermanencia":"2012"    
+      },
+      {
+        "Equipo": "Deportivo Cali",
+        "AñosPermanencia":"2014"            
+      },
+      {
+        "Equipo": "Independiente Medellín",
+        "AñosPermanencia":"2016"            
+      },
+      {
+        "Equipo": "Club Cerro Porteño",
+        "AñosPermanencia":"2017"            
+      },
+      {
+        "Equipo": "Club Libertad",
+        "AñosPermanencia":"2019"            
+      },
+      {
+        "Equipo": "Águilas Doradas Rionegro",
+        "AñosPermanencia":"2022"            
+      },
+      {
+        "Equipo": "Club Cienciano",
+        "AñosPermanencia":"2023"            
+      },
+      {
+        "Equipo": "Deportivo Pereira",
+        "AñosPermanencia":"2023-act"            
+      }
     ]
   },
   "DirectorDeportivo": "Héctor Fabio Ospina",
@@ -53,15 +89,38 @@
     "Edad": "60",
     "Experiencia": "ExFutbolista",
     "EquiposAnteriores": [
-      "Chía Fair Play",
-      "Bogotá Fútbol Club",
-      "Boyacá Chicó",
-      "Águilas Doradas Rionegro",
-      "Deportes Tolima",
-      "Junior de Barranquilla",
-      "Club Libertad",
-      "Deportes Tolima",
-      "Millonarios"
+      {
+        "Equipo": "Chía Fair Play",
+        "AñosPermanencia": "2003"    
+      },
+      {
+        "Equipo": "Bogotá Fútbol Club",
+        "AñosPermanencia": "2004"    
+      },
+      {
+        "Equipo": "Boyacá Chicó",
+        "AñosPermanencia": "2013"            
+      },
+      {
+        "Equipo": "Águilas Doradas Rionegro",
+        "AñosPermanencia": "2014"            
+      },
+      {
+        "Equipo": "Deportes Tolima",
+        "AñosPermanencia": "2014-2016"            
+      },
+      {
+        "Equipo": "Junior de Barranquilla",
+        "AñosPermanencia":"2017"            
+      },
+      {
+        "Equipo": "Deportes Tolima",
+        "AñosPermanencia":"2017-2019"            
+      },
+      {
+        "Equipo": "Millonarios",
+        "AñosPermanencia":"2019-act"            
+      }
     ]
   },
   "DirectorDeportivo": "Ricardo Pérez",
@@ -78,15 +137,42 @@
     "Edad": "60",
     "Experiencia": "ExFutbolista",
     "EquiposAnteriores": [
-      "Estudiantes de Mérida",
-      "Selección sub-17",
-      "Deportivo Lara",
-      "Selección sub-20",
-      "Selección absoluta",
-      "Atlético Mineiro",
-      "Universidad de Chile",
-      "Necaxa",
-      "Atlético Bucaramanga"
+      {
+        "Equipo": "Estudiantes de Mérida",
+        "AñosPermanencia": "2010-2011"    
+      },
+      {
+        "Equipo": "Selección sub-17",
+        "AñosPermanencia": "2012-2013"    
+      },
+      {
+        "Equipo": "Deportivo Lara",
+        "AñosPermanencia": "2013-2015"            
+      },
+      {
+        "Equipo": "Selección sub-20",
+        "AñosPermanencia": "2015-2019"            
+      },
+      {
+        "Equipo": "Selección absoluta",
+        "AñosPermanencia": "2016-2020"            
+      },
+      {
+        "Equipo": "Atlético Mineiro",
+        "AñosPermanencia":"2020"            
+      },
+      {
+        "Equipo": "Universidad de Chile",
+        "AñosPermanencia":"2020-2021"            
+      },
+      {
+        "Equipo": "Necaxa",
+        "AñosPermanencia":"2023"            
+      },
+      {
+        "Equipo": "Atlético Bucaramanga",
+        "AñosPermanencia":"2023-act"                    
+      }
     ]
   },
   "DirectorDeportivo": null,
@@ -103,10 +189,26 @@
     "Edad": "49",
     "Experiencia": "ExFutbolista",
     "EquiposAnteriores": [
-      "Racing Club de Montevideo",
-      "Danubio Fútbol Club",
-      "Carlos A. Mannucci",
-      "Cusco Fútbol Club"
+      {
+        "Equipo": "Racing Club de Montevideo",
+        "AñosPermanencia":"2017"            
+      },
+      {
+        "Equipo": "Danubio Fútbol Club",
+        "AñosPermanencia":"2018-2019"            
+      },
+      {
+        "Equipo": "Carlos A. Mannucci",
+        "AñosPermanencia":"2019-2020"            
+      },
+      {
+        "Equipo": "Cusco Fútbol Club",
+        "AñosPermanencia":"2022"                    
+      },
+      {
+        "Equipo": "Independiente Santa Fe",
+        "AñosPermanencia":"2023-act"                    
+      }      
     ]
   },
   "DirectorDeportivo": null,
